@@ -18,10 +18,11 @@ type fakeRunner struct {
 	wantName    string
 	writeReport func(root string, args []string)
 	output      string
+	result      commandResult
 	err         error
 }
 
-func (runner fakeRunner) Run(_ context.Context, root, name string, args []string, output io.Writer) error {
+func (runner fakeRunner) Run(_ context.Context, root, name string, args []string, output io.Writer) (commandResult, error) {
 	runner.t.Helper()
 	if name != runner.wantName {
 		runner.t.Fatalf("command = %q, want %q", name, runner.wantName)
@@ -32,7 +33,10 @@ func (runner fakeRunner) Run(_ context.Context, root, name string, args []string
 	if runner.output != "" {
 		_, _ = io.WriteString(output, runner.output)
 	}
-	return runner.err
+	if runner.result.OutputTail == "" {
+		runner.result.OutputTail = runner.output
+	}
+	return runner.result, runner.err
 }
 
 func TestServiceRunsGremlinsAndParsesReport(t *testing.T) {
@@ -44,8 +48,11 @@ func TestServiceRunsGremlinsAndParsesReport(t *testing.T) {
 		if len(args) < 2 || args[1] != "internal" {
 			t.Fatalf("args = %#v", args)
 		}
+		if argumentAfter(t, args, "--threshold-efficacy") != "0" || argumentAfter(t, args, "--threshold-mcover") != "0" {
+			t.Fatalf("native thresholds not disabled: %#v", args)
+		}
 		path := argumentAfter(t, args, "--output")
-		writeTestFile(t, path, `{"test_efficacy":100,"files":[]}`)
+		writeTestFile(t, path, gremlinsKilledReport)
 	}}}
 	report, err := service.Run(context.Background(), Options{Root: root, Language: "go", Paths: []string{"internal"}, MinimumScore: 80}, io.Discard)
 	if err != nil {
@@ -62,8 +69,11 @@ func TestServiceRunsStrykerNetWithPaths(t *testing.T) {
 		if !strings.Contains(strings.Join(args, " "), "--mutate src/Work.cs") {
 			t.Fatalf("args = %#v", args)
 		}
+		if argumentAfter(t, args, "--break-at") != "0" {
+			t.Fatalf("native threshold not disabled: %#v", args)
+		}
 		output := argumentAfter(t, args, "--output")
-		writeTestFile(t, filepath.Join(output, "reports", "mutation-report.json"), `{"schemaVersion":"1.0","files":{}}`)
+		writeTestFile(t, filepath.Join(output, "reports", "mutation-report.json"), `{"schemaVersion":"2","thresholds":{"high":80,"low":60,"break":0},"files":{}}`)
 	}}}
 	report, err := service.Run(context.Background(), Options{Root: root, Language: "csharp", Paths: []string{"src/Work.cs"}, MinimumScore: 80}, io.Discard)
 	if err != nil {
@@ -81,7 +91,7 @@ func TestServiceRunsStrykerJSWithCustomReport(t *testing.T) {
 		if !strings.Contains(joined, "--incremental") || argumentAfter(t, args, "--mutate") != "src/work.ts,src/other.ts" {
 			t.Fatalf("args = %#v", args)
 		}
-		writeTestFile(t, filepath.Join(root, "custom", "mutation.json"), `{"schemaVersion":"1.0","files":{}}`)
+		writeTestFile(t, filepath.Join(root, "custom", "mutation.json"), `{"schemaVersion":"1.0","thresholds":{"high":80,"low":60,"break":null},"files":{}}`)
 	}}}
 	report, err := service.Run(context.Background(), Options{
 		Root: root, Language: "typescript", Paths: []string{"src/work.ts", "src/other.ts"}, MinimumScore: 80,
@@ -106,14 +116,58 @@ func TestServiceRejectsUnchangedStrykerJSReport(t *testing.T) {
 	}
 }
 
-func TestServiceDoesNotAcceptReportAfterEngineFailure(t *testing.T) {
+func TestServiceRejectsReportAfterEngineFailure(t *testing.T) {
 	root := t.TempDir()
 	service := &Service{runner: fakeRunner{t: t, wantName: "gremlins", err: errors.New("engine failed"), writeReport: func(_ string, args []string) {
-		writeTestFile(t, argumentAfter(t, args, "--output"), `{"test_efficacy":100,"files":[]}`)
+		writeTestFile(t, argumentAfter(t, args, "--output"), gremlinsKilledReport)
 	}}}
-	report, err := service.Run(context.Background(), Options{Root: root, Language: "go", MinimumScore: 80}, io.Discard)
-	if err != nil || report.Score == nil || *report.Score != 100 {
-		t.Fatalf("report = %#v, error = %v", report, err)
+	if _, err := service.Run(context.Background(), Options{Root: root, Language: "go", MinimumScore: 80}, io.Discard); err == nil {
+		t.Fatal("expected engine failure")
+	}
+}
+
+func TestServiceAcceptsDocumentedStrykerJSThresholdExit(t *testing.T) {
+	root := t.TempDir()
+	service := &Service{runner: fakeRunner{
+		t: t, wantName: npxCommand(),
+		result: commandResult{ExitCode: 1, OutputTail: "12:34:56 (1234) ERROR MutationTestReportHelper \x1b[31mFinal mutation score 50.00 under breaking threshold 80, setting exit code to 1 (failure).\x1b[39m"},
+		writeReport: func(root string, _ []string) {
+			writeTestFile(t, filepath.Join(root, "reports", "mutation", "mutation.json"), strykerHalfKilledReport)
+		},
+	}}
+	report, err := service.Run(context.Background(), Options{Root: root, Language: "typescript", MinimumScore: 80}, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Provenance.NativeExitCode != 1 {
+		t.Fatalf("provenance = %#v", report.Provenance)
+	}
+}
+
+func TestServiceRejectsStrykerJSThresholdDiagnosticThatDoesNotMatchReport(t *testing.T) {
+	root := t.TempDir()
+	service := &Service{runner: fakeRunner{
+		t: t, wantName: npxCommand(),
+		result: commandResult{ExitCode: 1, OutputTail: "12:34:56 (1234) ERROR MutationTestReportHelper Final mutation score 75.00 under breaking threshold 80, setting exit code to 1 (failure)."},
+		writeReport: func(root string, _ []string) {
+			writeTestFile(t, filepath.Join(root, "reports", "mutation", "mutation.json"), strykerHalfKilledReport)
+		},
+	}}
+	if _, err := service.Run(context.Background(), Options{Root: root, Language: "typescript"}, io.Discard); err == nil {
+		t.Fatal("expected mismatched threshold diagnostic failure")
+	}
+}
+
+func TestServiceRejectsOtherStrykerJSExitOne(t *testing.T) {
+	root := t.TempDir()
+	service := &Service{runner: fakeRunner{
+		t: t, wantName: npxCommand(), result: commandResult{ExitCode: 1, OutputTail: "test runner crashed"},
+		writeReport: func(root string, _ []string) {
+			writeTestFile(t, filepath.Join(root, "reports", "mutation", "mutation.json"), strykerHalfKilledReport)
+		},
+	}}
+	if _, err := service.Run(context.Background(), Options{Root: root, Language: "typescript"}, io.Discard); err == nil {
+		t.Fatal("expected native process failure")
 	}
 }
 
@@ -151,12 +205,16 @@ func TestServiceDoesNotAcceptReportAfterCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	service := &Service{runner: fakeRunner{t: t, wantName: "gremlins", err: errors.New("engine failed"), writeReport: func(_ string, args []string) {
-		writeTestFile(t, argumentAfter(t, args, "--output"), `{"test_efficacy":100,"files":[]}`)
+		writeTestFile(t, argumentAfter(t, args, "--output"), gremlinsKilledReport)
 	}}}
 	if _, err := service.Run(ctx, Options{Root: root, Language: "go", MinimumScore: 80}, io.Discard); err == nil || !strings.Contains(err.Error(), "canceled") {
 		t.Fatalf("error = %v", err)
 	}
 }
+
+const gremlinsKilledReport = `{"test_efficacy":100,"mutants_total":1,"mutants_killed":1,"mutants_lived":0,"mutants_not_viable":0,"mutants_not_covered":0,"files":[{"file_name":"work.go","mutations":[{"line":1,"column":1,"type":"CONDITIONALS_NEGATION","status":"KILLED"}]}]}`
+
+const strykerHalfKilledReport = `{"schemaVersion":"1.0","thresholds":{"high":90,"low":80,"break":80},"files":{"work.ts":{"language":"typescript","source":"return true;","mutants":[{"id":"1","mutatorName":"x","status":"Killed","location":{"start":{"line":1,"column":1},"end":{"line":1,"column":2}}},{"id":"2","mutatorName":"x","status":"Survived","location":{"start":{"line":2,"column":1},"end":{"line":2,"column":2}}}]}}}`
 
 func TestCommandErrorDistinguishesDeadlineAndCancellation(t *testing.T) {
 	deadlineContext, cancelDeadline := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))

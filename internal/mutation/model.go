@@ -1,6 +1,6 @@
 package mutation
 
-const SchemaVersion = "1"
+const SchemaVersion = "2"
 
 type Options struct {
 	Root           string
@@ -22,6 +22,14 @@ type Report struct {
 	Passed        bool           `json:"passed"`
 	Summary       Summary        `json:"summary"`
 	Mutants       []MutantResult `json:"mutants"`
+	Provenance    Provenance     `json:"provenance"`
+}
+
+type Provenance struct {
+	NativeExitCode            int      `json:"nativeExitCode"`
+	NativeReportSchemaVersion *string  `json:"nativeReportSchemaVersion"`
+	NativeReportSHA256        *string  `json:"nativeReportSha256"`
+	NativeBreakThreshold      *float64 `json:"nativeBreakThreshold"`
 }
 
 type Summary struct {
@@ -31,6 +39,7 @@ type Summary struct {
 	TimedOut     int `json:"timedOut"`
 	NoCoverage   int `json:"noCoverage"`
 	CompileError int `json:"compileError"`
+	RuntimeError int `json:"runtimeError"`
 	Ignored      int `json:"ignored"`
 	Other        int `json:"other"`
 }

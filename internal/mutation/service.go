@@ -8,7 +8,9 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -98,18 +100,21 @@ func (service *Service) runGremlins(ctx context.Context, options Options, output
 	if len(options.Paths) == 1 {
 		args = append(args, options.Paths[0])
 	}
-	args = append(args, "--output", reportPath)
-	runErr := service.runner.Run(ctx, options.Root, "gremlins", args, io.MultiWriter(output, engineOutput))
+	args = append(args, "--output", reportPath, "--threshold-efficacy", "0", "--threshold-mcover", "0")
+	result, runErr := service.runner.Run(ctx, options.Root, "gremlins", args, io.MultiWriter(output, engineOutput))
 	if ctx.Err() != nil {
 		return Report{}, commandError(ctx, runErr)
 	}
+	if runErr != nil {
+		return Report{}, commandError(ctx, runErr)
+	}
+	if result.ExitCode != 0 {
+		return Report{}, nativeCommandError("gremlins", result)
+	}
 	data, err := os.ReadFile(reportPath)
 	if os.IsNotExist(err) {
-		if runErr == nil && outputHasLine(engineOutput.String(), "No results to report.") {
-			return makeReport("go", "gremlins", "unavailable", options.MinimumScore, nil, []MutantResult{}), nil
-		}
-		if runErr != nil {
-			return Report{}, commandError(ctx, runErr)
+		if outputHasLine(engineOutput.String(), "No results to report.") {
+			return makeReport("go", "gremlins", "unavailable", options.MinimumScore, nil, []MutantResult{}, Provenance{NativeExitCode: 0}), nil
 		}
 		return Report{}, fmt.Errorf("Gremlins completed without a JSON report")
 	}
@@ -156,19 +161,22 @@ func (service *Service) runStrykerNet(ctx context.Context, options Options, outp
 		return Report{}, err
 	}
 	defer os.RemoveAll(directory)
-	args := []string{"stryker", "--reporter", "json", "--output", directory}
+	args := []string{"stryker", "--reporter", "json", "--output", directory, "--break-at", "0"}
 	for _, path := range options.Paths {
 		args = append(args, "--mutate", filepath.ToSlash(path))
 	}
-	runErr := service.runner.Run(ctx, options.Root, "dotnet", args, output)
+	result, runErr := service.runner.Run(ctx, options.Root, "dotnet", args, output)
 	if ctx.Err() != nil {
 		return Report{}, commandError(ctx, runErr)
 	}
+	if runErr != nil {
+		return Report{}, commandError(ctx, runErr)
+	}
+	if result.ExitCode != 0 {
+		return Report{}, nativeCommandError("dotnet", result)
+	}
 	reportPath, findErr := findJSONReport(directory)
 	if findErr != nil {
-		if runErr != nil {
-			return Report{}, commandError(ctx, runErr)
-		}
 		return Report{}, findErr
 	}
 	data, err := os.ReadFile(reportPath)
@@ -198,18 +206,21 @@ func (service *Service) runStrykerJS(ctx context.Context, options Options, outpu
 	if err != nil {
 		return Report{}, err
 	}
-	runErr := service.runner.Run(ctx, options.Root, npxCommand(), args, output)
+	result, runErr := service.runner.Run(ctx, options.Root, npxCommand(), args, output)
 	if ctx.Err() != nil {
 		return Report{}, commandError(ctx, runErr)
+	}
+	if runErr != nil {
+		return Report{}, commandError(ctx, runErr)
+	}
+	if result.ExitCode != 0 && result.ExitCode != 1 {
+		return Report{}, nativeCommandError(npxCommand(), result)
 	}
 	current, stateErr := reportState(reportPath)
 	if stateErr != nil {
 		return Report{}, stateErr
 	}
 	if !current.exists || current == previous {
-		if runErr != nil {
-			return Report{}, commandError(ctx, runErr)
-		}
 		return Report{}, fmt.Errorf("StrykerJS did not update JSON report %s", reportPath)
 	}
 	data, err := os.ReadFile(reportPath)
@@ -220,6 +231,10 @@ func (service *Service) runStrykerJS(ctx context.Context, options Options, outpu
 	if err != nil {
 		return Report{}, err
 	}
+	if result.ExitCode == 1 && !validStrykerJSThresholdExit(result, report) {
+		return Report{}, nativeCommandError(npxCommand(), result)
+	}
+	report.Provenance.NativeExitCode = result.ExitCode
 	return report, nil
 }
 
@@ -292,6 +307,31 @@ func commandError(ctx context.Context, err error) error {
 		return fmt.Errorf("mutation run canceled: %w", ctx.Err())
 	}
 	return err
+}
+
+var (
+	strykerJSThresholdLine = regexp.MustCompile(`(?:^|\s)MutationTestReportHelper\s+.*Final mutation score ([0-9]+(?:\.[0-9]+)?) under breaking threshold ([0-9]+(?:\.[0-9]+)?), setting exit code to 1 \(failure\)\.`)
+	ansiEscape             = regexp.MustCompile(`\x1b\[[0-9;]*m`)
+)
+
+func validStrykerJSThresholdExit(result commandResult, report Report) bool {
+	if result.ExitCode != 1 || report.Score == nil {
+		return false
+	}
+	for _, line := range strings.Split(result.OutputTail, "\n") {
+		match := strykerJSThresholdLine.FindStringSubmatch(ansiEscape.ReplaceAllString(line, ""))
+		if match == nil {
+			continue
+		}
+		score, scoreErr := strconv.ParseFloat(match[1], 64)
+		threshold, thresholdErr := strconv.ParseFloat(match[2], 64)
+		return scoreErr == nil && thresholdErr == nil && report.Provenance.NativeBreakThreshold != nil && round(score) == *report.Score && threshold == *report.Provenance.NativeBreakThreshold && score < threshold
+	}
+	return false
+}
+
+func nativeCommandError(name string, result commandResult) error {
+	return fmt.Errorf("%s exited with code %d\n%s", name, result.ExitCode, result.OutputTail)
 }
 
 func npxCommand() string {

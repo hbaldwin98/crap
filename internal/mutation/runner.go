@@ -9,14 +9,19 @@ import (
 )
 
 type commandRunner interface {
-	Run(context.Context, string, string, []string, io.Writer) error
+	Run(context.Context, string, string, []string, io.Writer) (commandResult, error)
+}
+
+type commandResult struct {
+	ExitCode   int
+	OutputTail string
 }
 
 type execRunner struct{}
 
 const capturedOutputLimit = 4000
 
-func (execRunner) Run(ctx context.Context, root, name string, args []string, output io.Writer) error {
+func (execRunner) Run(ctx context.Context, root, name string, args []string, output io.Writer) (commandResult, error) {
 	command := exec.CommandContext(ctx, name, args...)
 	command.Dir = root
 	configureCommandCancellation(command)
@@ -25,9 +30,12 @@ func (execRunner) Run(ctx context.Context, root, name string, args []string, out
 	command.Stderr = io.MultiWriter(output, captured)
 	if err := command.Run(); err != nil {
 		message := captured.String()
-		return fmt.Errorf("%s failed: %w\n%s", name, err, message)
+		if exitError, ok := err.(*exec.ExitError); ok {
+			return commandResult{ExitCode: exitError.ExitCode(), OutputTail: message}, nil
+		}
+		return commandResult{}, fmt.Errorf("%s failed: %w\n%s", name, err, message)
 	}
-	return nil
+	return commandResult{ExitCode: 0, OutputTail: captured.String()}, nil
 }
 
 type tailBuffer struct {
