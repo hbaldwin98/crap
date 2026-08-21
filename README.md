@@ -1,6 +1,6 @@
 # crap
 
-`crap` deterministically calculates cyclomatic complexity and CRAP scores for C# and Go callables. It can run as a command-line tool or an MCP stdio server.
+`crap` deterministically calculates cyclomatic complexity and CRAP scores for C#, Go, TypeScript, and TSX callables. It can run as a command-line tool or an MCP stdio server.
 
 The executable parses the source and calculates every score. An AI caller can choose paths, coverage, a Git diff, and a score threshold, but it does not derive or reinterpret the result.
 
@@ -25,7 +25,7 @@ On Windows, an explicit `.exe` name is convenient:
 go build -o crap.exe ./cmd/crap
 ```
 
-Analyze all C# and Go source below the current directory:
+Analyze all supported source below the current directory:
 
 ```sh
 ./crap .
@@ -43,7 +43,7 @@ You can also run it from source without building a separate executable:
 go run ./cmd/crap --format json .
 ```
 
-If no path is supplied, `crap` analyzes the current directory. Go `_test.go` files are excluded by default because Go coverprofiles do not instrument test function bodies.
+If no path is supplied, `crap` analyzes the current directory. Go `_test.go` and TypeScript `.spec`/`.test` files are excluded by default because tests produce coverage evidence but should not normally be scored as production callables.
 
 ## CLI Usage
 
@@ -61,7 +61,7 @@ Options:
 | `--diff-base REVISION` | none | Return only callables touching lines changed from a Git revision. |
 | `--threshold SCORE` | `30` | Mark scores strictly greater than this value as above threshold. |
 | `--fail-on-threshold` | `false` | Exit with code `2` when any returned callable is above threshold. |
-| `--include-tests` | `false` | Include Go `_test.go` files. |
+| `--include-tests` | `false` | Include Go `_test.go` and TypeScript `.spec`/`.test` files. |
 | `--version` | | Print the version. |
 
 Put options before paths. Paths are resolved from the current working directory and can be individual files or directories.
@@ -100,15 +100,32 @@ go test -coverpkg=./... -coverprofile=coverage.out ./...
 crap --coverage coverage.out .
 ```
 
-For C#, export coverage in Cobertura XML format with the test runner or coverage tool used by the project, then pass that file:
+For C# or TypeScript, export coverage in Cobertura XML format with the test runner or coverage tool used by the project, then pass that file:
 
 ```sh
 crap --coverage coverage.xml src/Example.cs
 ```
 
+The same command accepts TypeScript coverage from tools that emit Cobertura:
+
+```sh
+crap --coverage coverage/cobertura-coverage.xml src
+```
+
+For Angular v22, the CLI can run the specs and emit Cobertura without another coverage tool:
+
+```sh
+ng test --coverage --coverage-reporters=cobertura
+crap --coverage coverage/cobertura-coverage.xml --threshold 20 --fail-on-threshold src
+```
+
+Angular writes reports below `coverage/`; multi-project workspaces may add the project name to the path. Pass the generated `cobertura-coverage.xml` path to `crap`. Older Angular projects using Karma may use `--code-coverage` and need `cobertura` enabled in their Karma coverage reporter configuration.
+
+The `.spec.ts` and `.test.ts` files execute and generate coverage for application code, but `crap` excludes those test files from scoring unless `--include-tests` is set. Angular `.html` templates are not analyzed; CRAP scores cover the TypeScript component, service, directive, pipe, and other callable logic.
+
 Accepted formats:
 
-- Cobertura XML, matched to C# or Go source by normalized file path
+- Cobertura XML, matched to C#, Go, TypeScript, or TSX source by normalized file path
 - Native Go coverprofiles produced by `go test -coverprofile`
 
 Cobertura coverage is the percentage of instrumented lines in a callable that have hits. Go coverprofile coverage is weighted by each block's statement count. A callable missing from a supplied report is scored with 0% coverage and retains `coveragePercent: null` so missing data is not mistaken for measured zero coverage.
@@ -121,7 +138,7 @@ Use `--diff-base` to report only callables that intersect added or modified line
 ./crap --diff-base main --format json .
 ```
 
-The command must run in a Git worktree when this option is used. Untracked `.cs` and `.go` files count as entirely changed. Deleted code has no callable in the current source tree, so it is not scored.
+The command must run in a Git worktree when this option is used. Untracked `.cs`, `.go`, `.ts`, and `.tsx` files count as entirely changed. Deleted code has no callable in the current source tree, so it is not scored.
 
 A typical changed-code CI check is:
 
@@ -161,7 +178,7 @@ The server exposes one tool, `analyze_code`. Its inputs are:
 | `coveragePath` | string | none | Read Cobertura XML or a Go coverprofile, relative to `root`. |
 | `diffBase` | string | none | Return only callables changed from this Git revision. |
 | `crapThreshold` | number | `30` | Mark scores strictly greater than this value as above threshold. |
-| `includeTests` | boolean | `false` | Include Go `_test.go` files. |
+| `includeTests` | boolean | `false` | Include Go `_test.go` and TypeScript `.spec`/`.test` files. |
 
 Example tool input with a maximum allowed score of 10:
 
@@ -199,7 +216,11 @@ Complexity starts at `1` for each callable.
 
 C# adds one for each `if`, loop, `catch`, non-default switch label, switch expression arm, ternary, `and`/`or` pattern, and `&&`, `||`, or `??` expression. Nested C# local functions are scored separately and do not contribute branches to their containing method.
 
+The bundled C# grammar supports C# 1 through C# 13. The analyzer rejects syntax errors rather than silently producing a partial score.
+
 Go adds one for each `if`, `for`, non-default `case`, and `&&` or `||` expression.
+
+TypeScript and TSX add one for each `if`, loop, `catch`, non-default `case`, ternary, and `&&`, `||`, or `??` expression. Functions, generator functions, methods, function expressions, and arrow functions are scored separately; nested callables do not add their branches to the containing callable.
 
 Files and callables are sorted by normalized path and source line. JSON contains no timestamps or environment-dependent IDs. Invalid syntax fails analysis instead of returning a partial score.
 

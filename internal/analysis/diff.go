@@ -19,12 +19,12 @@ func gitChangedLines(root, base string) (changedLines, error) {
 	if base == "" {
 		return nil, nil
 	}
-	output, err := gitOutput(root, "diff", "--unified=0", "--no-color", base, "--", "*.cs", "*.go")
+	output, err := gitOutput(root, "diff", "--unified=0", "--no-color", base, "--", "*.cs", "*.go", "*.ts", "*.tsx")
 	if err != nil {
 		return nil, fmt.Errorf("git diff %q: %w", base, err)
 	}
 	result := parseDiff(string(output))
-	untracked, err := gitOutput(root, "ls-files", "-z", "--others", "--exclude-standard", "--", "*.cs", "*.go")
+	untracked, err := gitOutput(root, "ls-files", "-z", "--others", "--exclude-standard", "--", "*.cs", "*.go", "*.ts", "*.tsx")
 	if err != nil {
 		return nil, fmt.Errorf("list untracked source files: %w", err)
 	}

@@ -11,6 +11,7 @@ import (
 	treesitter "github.com/tree-sitter/go-tree-sitter"
 	tree_sitter_c_sharp "github.com/tree-sitter/tree-sitter-c-sharp/bindings/go"
 	tree_sitter_go "github.com/tree-sitter/tree-sitter-go/bindings/go"
+	tree_sitter_typescript "github.com/tree-sitter/tree-sitter-typescript/bindings/go"
 )
 
 var csharpCallableKinds = map[string]string{
@@ -48,6 +49,26 @@ var goBranchKinds = map[string]bool{
 	"for_statement": true,
 }
 
+var typescriptCallableKinds = map[string]string{
+	"function_declaration":           "function",
+	"generator_function_declaration": "generator_function",
+	"function_expression":            "function",
+	"generator_function":             "generator_function",
+	"arrow_function":                 "arrow_function",
+	"method_definition":              "method",
+}
+
+var typescriptBranchKinds = map[string]bool{
+	"if_statement":       true,
+	"for_statement":      true,
+	"for_in_statement":   true,
+	"while_statement":    true,
+	"do_statement":       true,
+	"catch_clause":       true,
+	"switch_case":        true,
+	"ternary_expression": true,
+}
+
 type languageDefinition struct {
 	name          string
 	parser        *treesitter.Parser
@@ -73,6 +94,21 @@ func NewAnalyzer() (*Analyzer, error) {
 		goParser.Close()
 		return nil, fmt.Errorf("load Go grammar: %w", err)
 	}
+	typescriptParser := treesitter.NewParser()
+	if err := typescriptParser.SetLanguage(treesitter.NewLanguage(tree_sitter_typescript.LanguageTypescript())); err != nil {
+		csharpParser.Close()
+		goParser.Close()
+		typescriptParser.Close()
+		return nil, fmt.Errorf("load TypeScript grammar: %w", err)
+	}
+	tsxParser := treesitter.NewParser()
+	if err := tsxParser.SetLanguage(treesitter.NewLanguage(tree_sitter_typescript.LanguageTSX())); err != nil {
+		csharpParser.Close()
+		goParser.Close()
+		typescriptParser.Close()
+		tsxParser.Close()
+		return nil, fmt.Errorf("load TSX grammar: %w", err)
+	}
 	return &Analyzer{languages: map[string]languageDefinition{
 		".cs": {
 			name: "csharp", parser: csharpParser, callableKinds: csharpCallableKinds, branchKinds: csharpBranchKinds,
@@ -81,6 +117,14 @@ func NewAnalyzer() (*Analyzer, error) {
 		".go": {
 			name: "go", parser: goParser, callableKinds: goCallableKinds, branchKinds: goBranchKinds,
 			logicalOps: map[string]bool{"&&": true, "||": true}, qualifiedName: goQualifiedName,
+		},
+		".ts": {
+			name: "typescript", parser: typescriptParser, callableKinds: typescriptCallableKinds, branchKinds: typescriptBranchKinds,
+			logicalOps: map[string]bool{"&&": true, "||": true, "??": true}, qualifiedName: typescriptQualifiedName,
+		},
+		".tsx": {
+			name: "typescript", parser: tsxParser, callableKinds: typescriptCallableKinds, branchKinds: typescriptBranchKinds,
+			logicalOps: map[string]bool{"&&": true, "||": true, "??": true}, qualifiedName: typescriptQualifiedName,
 		},
 	}}, nil
 }
@@ -322,6 +366,52 @@ func goQualifiedName(node *treesitter.Node, source []byte) string {
 	return strings.Join(parts, ".")
 }
 
+func typescriptQualifiedName(node *treesitter.Node, source []byte) string {
+	name := node.ChildByFieldName("name")
+	if name == nil {
+		name = typescriptAssignedName(node)
+	}
+	callableName := "<anonymous>"
+	if name != nil {
+		callableName = strings.TrimSpace(name.Utf8Text(source))
+	} else {
+		position := node.StartPosition()
+		callableName = fmt.Sprintf("<anonymous@%d:%d>", position.Row+1, position.Column+1)
+	}
+
+	parts := make([]string, 0, 3)
+	for parent := node.Parent(); parent != nil; parent = parent.Parent() {
+		switch parent.Kind() {
+		case "class_declaration", "abstract_class_declaration", "internal_module":
+			if parentName := parent.ChildByFieldName("name"); parentName != nil {
+				parts = append(parts, parentName.Utf8Text(source))
+			}
+		}
+	}
+	for left, right := 0, len(parts)-1; left < right; left, right = left+1, right-1 {
+		parts[left], parts[right] = parts[right], parts[left]
+	}
+	parts = append(parts, callableName)
+	return strings.Join(parts, ".")
+}
+
+func typescriptAssignedName(node *treesitter.Node) *treesitter.Node {
+	for parent := node.Parent(); parent != nil; parent = parent.Parent() {
+		switch parent.Kind() {
+		case "variable_declarator", "public_field_definition":
+			return parent.ChildByFieldName("name")
+		case "pair":
+			return parent.ChildByFieldName("key")
+		case "assignment_expression":
+			return parent.ChildByFieldName("left")
+		}
+		if _, nested := typescriptCallableKinds[parent.Kind()]; nested {
+			break
+		}
+	}
+	return nil
+}
+
 type sourceCollector struct {
 	includeTests bool
 	seen         map[string]bool
@@ -390,7 +480,16 @@ func isSourceFile(path string, includeTests bool) bool {
 	if extension == ".go" && !includeTests && strings.HasSuffix(strings.ToLower(path), "_test.go") {
 		return false
 	}
-	return extension == ".cs" || extension == ".go"
+	if (extension == ".ts" || extension == ".tsx") && !includeTests && isTypeScriptTest(path) {
+		return false
+	}
+	return extension == ".cs" || extension == ".go" || extension == ".ts" || extension == ".tsx"
+}
+
+func isTypeScriptTest(path string) bool {
+	base := strings.ToLower(filepath.Base(path))
+	return strings.HasSuffix(base, ".spec.ts") || strings.HasSuffix(base, ".test.ts") ||
+		strings.HasSuffix(base, ".spec.tsx") || strings.HasSuffix(base, ".test.tsx")
 }
 
 func summarize(methods []MethodResult) Summary {

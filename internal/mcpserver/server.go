@@ -11,11 +11,11 @@ import (
 
 type AnalyzeInput struct {
 	Root          string   `json:"root,omitempty" jsonschema:"Working directory used to resolve paths, coverage, and Git revisions. Defaults to the MCP server working directory."`
-	Paths         []string `json:"paths,omitempty" jsonschema:"C# or Go files and directories to analyze, relative to root. Defaults to the root directory."`
+	Paths         []string `json:"paths,omitempty" jsonschema:"C#, Go, TypeScript, or TSX files and directories to analyze, relative to root. Defaults to the root directory."`
 	CoveragePath  string   `json:"coveragePath,omitempty" jsonschema:"Cobertura XML or Go coverprofile path, relative to root. Omit to score with unknown coverage treated as zero."`
 	DiffBase      string   `json:"diffBase,omitempty" jsonschema:"Git revision to compare against. When set, return only callables intersecting added or modified lines."`
 	CRAPThreshold *float64 `json:"crapThreshold,omitempty" jsonschema:"Score above which a callable is flagged. Defaults to 30."`
-	IncludeTests  bool     `json:"includeTests,omitempty" jsonschema:"Include Go _test.go files. Defaults to false."`
+	IncludeTests  bool     `json:"includeTests,omitempty" jsonschema:"Include Go _test.go and TypeScript .spec/.test files. Defaults to false."`
 }
 
 func Run(ctx context.Context, version string) error {
@@ -26,7 +26,7 @@ func New(version string) *mcp.Server {
 	server := mcp.NewServer(&mcp.Implementation{Name: "crap", Version: version}, nil)
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "analyze_code",
-		Description: "Deterministically calculate cyclomatic complexity, coverage, and CRAP scores for C# and Go callables. Can restrict results to callables changed from a Git revision.",
+		Description: "Deterministically calculate cyclomatic complexity, coverage, and CRAP scores for C#, Go, and TypeScript callables. Can restrict results to callables changed from a Git revision.",
 	}, analyze)
 	return server
 }

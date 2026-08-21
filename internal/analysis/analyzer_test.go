@@ -118,3 +118,147 @@ func (s *Service) Run(ready bool) { if ready { return } }
 		}
 	}
 }
+
+func TestAnalyzerCountsTypeScriptCallablesAndBranches(t *testing.T) {
+	root := t.TempDir()
+	source := `namespace Demo {
+export function classify(value: number, ready: boolean): number {
+    if (value < 0) return -1;
+    for (let i = 0; i < value; i++) value--;
+    switch (value) {
+    case 1: return 1;
+    case 2: return 2;
+    default: return ready && value > 2 || value < -10 ? 3 : 4;
+    }
+}
+
+export function* values(): Generator<number> { yield 1; }
+
+export class Worker {
+    run(value: number): void {
+        try { if (value > 0) return; } catch { return; }
+    }
+}
+
+export const choose = (value: number): number => value > 0 ? value : -value;
+}`
+	if err := os.WriteFile(filepath.Join(root, "sample.ts"), []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	analyzer, err := NewAnalyzer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer analyzer.Close()
+	report, err := analyzer.Analyze(Options{Root: root, Paths: []string{"."}, CRAPThreshold: 30})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]int{
+		"Demo.classify":   8,
+		"Demo.values":     1,
+		"Demo.Worker.run": 3,
+		"Demo.choose":     2,
+	}
+	if len(report.Methods) != len(want) {
+		t.Fatalf("got %d TypeScript callables, want %d: %#v", len(report.Methods), len(want), report.Methods)
+	}
+	for _, method := range report.Methods {
+		if method.Language != "typescript" {
+			t.Errorf("language = %q, want typescript", method.Language)
+		}
+		if method.Complexity != want[method.Name] {
+			t.Errorf("%s complexity = %d, want %d", method.Name, method.Complexity, want[method.Name])
+		}
+	}
+}
+
+func TestAnalyzerAppliesCoberturaToTypeScript(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "src"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	source := `export function work(ready: boolean): number {
+    if (ready) return 1;
+    return 0;
+}`
+	if err := os.WriteFile(filepath.Join(root, "src", "work.ts"), []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	coverage := `<coverage><packages><package><classes><class filename="src/work.ts"><lines>
+<line number="2" hits="1"/><line number="3" hits="0"/>
+</lines></class></classes></package></packages></coverage>`
+	if err := os.WriteFile(filepath.Join(root, "coverage.xml"), []byte(coverage), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	analyzer, err := NewAnalyzer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer analyzer.Close()
+	report, err := analyzer.Analyze(Options{
+		Root: root, Paths: []string{"src"}, CoveragePath: "coverage.xml", CRAPThreshold: 30,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Methods) != 1 || report.Methods[0].CoveragePercent == nil {
+		t.Fatalf("unexpected TypeScript coverage result: %#v", report.Methods)
+	}
+	method := report.Methods[0]
+	if *method.CoveragePercent != 50 || method.CRAP != 2.5 {
+		t.Fatalf("coverage = %v, CRAP = %.2f; want 50%% and 2.50", *method.CoveragePercent, method.CRAP)
+	}
+}
+
+func TestAnalyzerParsesTSXAndNamesComponents(t *testing.T) {
+	root := t.TempDir()
+	source := `type Props = { ready: boolean; count: number };
+export const Status = ({ ready, count }: Props) => (
+    <section>{ready && (count > 0 ? <b>Ready</b> : <i>Empty</i>)}</section>
+);`
+	if err := os.WriteFile(filepath.Join(root, "Status.tsx"), []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	analyzer, err := NewAnalyzer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer analyzer.Close()
+	report, err := analyzer.Analyze(Options{Root: root, Paths: []string{"."}, CRAPThreshold: 30})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Methods) != 1 {
+		t.Fatalf("got %d TSX callables, want 1: %#v", len(report.Methods), report.Methods)
+	}
+	method := report.Methods[0]
+	if method.Name != "Status" || method.Language != "typescript" || method.Complexity != 3 {
+		t.Fatalf("TSX result = %#v, want Status with complexity 3", method)
+	}
+}
+
+func TestAnalyzerParsesModernCSharp13Syntax(t *testing.T) {
+	root := t.TempDir()
+	source := `namespace Demo;
+public record Person(string Name)
+{
+    public required int Age { get; init; }
+    public string Describe(int[] values)
+    {
+        var text = $"""Name: {{Name}}""";
+        return values is [1, ..] and not [] ? text : "none";
+    }
+}`
+	if err := os.WriteFile(filepath.Join(root, "Modern.cs"), []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	analyzer, err := NewAnalyzer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer analyzer.Close()
+	if _, err := analyzer.Analyze(Options{Root: root, Paths: []string{"."}, CRAPThreshold: 30}); err != nil {
+		t.Fatalf("parse modern C# syntax: %v", err)
+	}
+}

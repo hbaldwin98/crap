@@ -63,7 +63,7 @@ func parseOptions(args []string, stderr io.Writer) (cliOptions, bool) {
 	flags.StringVar(&options.diffBase, "diff-base", "", "only callables touching lines changed from this Git revision")
 	flags.Float64Var(&options.threshold, "threshold", 30, "CRAP score threshold")
 	flags.BoolVar(&options.failOnThreshold, "fail-on-threshold", false, "exit 2 when a callable exceeds the threshold")
-	flags.BoolVar(&options.includeTests, "include-tests", false, "include Go _test.go files")
+	flags.BoolVar(&options.includeTests, "include-tests", false, "include Go and TypeScript test files")
 	flags.BoolVar(&options.showVersion, "version", false, "print version")
 	flags.Usage = func() { writeUsage(stderr, flags) }
 	if err := flags.Parse(args); err != nil {
@@ -84,7 +84,7 @@ func parseOptions(args []string, stderr io.Writer) (cliOptions, bool) {
 func writeUsage(writer io.Writer, flags *flag.FlagSet) {
 	fmt.Fprintln(writer, "Usage: crap [options] [path ...]")
 	fmt.Fprintln(writer, "       crap mcp")
-	fmt.Fprintln(writer, "Deterministically calculate cyclomatic complexity and CRAP scores for C# and Go callables.")
+	fmt.Fprintln(writer, "Deterministically calculate cyclomatic complexity and CRAP scores for C#, Go, and TypeScript callables.")
 	flags.PrintDefaults()
 }
 

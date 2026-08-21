@@ -8,7 +8,7 @@ import (
 
 func TestFindSourceFilesExcludesGoTestsByDefault(t *testing.T) {
 	root := t.TempDir()
-	for _, name := range []string{"main.go", "main_test.go", "Example.cs", "notes.txt"} {
+	for _, name := range []string{"main.go", "main_test.go", "Example.cs", "app.ts", "app.spec.ts", "view.tsx", "view.test.tsx", "notes.txt"} {
 		if err := os.WriteFile(filepath.Join(root, name), nil, 0o600); err != nil {
 			t.Fatal(err)
 		}
@@ -17,14 +17,14 @@ func TestFindSourceFilesExcludesGoTestsByDefault(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(files) != 2 {
-		t.Fatalf("default files = %v, want main.go and Example.cs", files)
+	if len(files) != 4 {
+		t.Fatalf("default files = %v, want Go, C#, TypeScript, and TSX source", files)
 	}
 	files, err = findSourceFiles(root, []string{"."}, true)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(files) != 3 {
-		t.Fatalf("files with tests = %v, want three source files", files)
+	if len(files) != 7 {
+		t.Fatalf("files with tests = %v, want seven source files", files)
 	}
 }

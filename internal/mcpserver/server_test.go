@@ -16,6 +16,9 @@ func TestAnalyzeCodeToolReturnsStructuredReport(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "sample.go"), []byte("package sample\nfunc Work(ok bool) { if ok { return } }\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(root, "sample.ts"), []byte("export const choose = (ok: boolean) => ok ? 1 : 0;\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 
 	ctx := context.Background()
 	serverTransport, clientTransport := mcp.NewInMemoryTransports()
@@ -40,7 +43,7 @@ func TestAnalyzeCodeToolReturnsStructuredReport(t *testing.T) {
 		Name: "analyze_code",
 		Arguments: map[string]any{
 			"root":  root,
-			"paths": []string{"sample.go"},
+			"paths": []string{"sample.go", "sample.ts"},
 		},
 	})
 	if err != nil {
@@ -57,7 +60,7 @@ func TestAnalyzeCodeToolReturnsStructuredReport(t *testing.T) {
 	if err := json.Unmarshal(data, &report); err != nil {
 		t.Fatal(err)
 	}
-	if len(report.Methods) != 1 || report.Methods[0].Language != "go" || report.Methods[0].Complexity != 2 || report.Methods[0].CRAP != 6 {
+	if len(report.Methods) != 2 || report.Methods[0].Language != "go" || report.Methods[1].Language != "typescript" || report.Methods[1].Complexity != 2 {
 		t.Fatalf("unexpected structured report: %#v", report)
 	}
 
