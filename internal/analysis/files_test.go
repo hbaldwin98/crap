@@ -13,14 +13,14 @@ func TestFindSourceFilesExcludesGoTestsByDefault(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	files, err := findSourceFiles(root, []string{"."}, false)
+	files, err := findSourceFiles(root, []string{"."}, false, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(files) != 4 {
 		t.Fatalf("default files = %v, want Go, C#, TypeScript, and TSX source", files)
 	}
-	files, err = findSourceFiles(root, []string{"."}, true)
+	files, err = findSourceFiles(root, []string{"."}, true, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

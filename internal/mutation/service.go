@@ -13,6 +13,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/hbaldwin98/crap/internal/rootauth"
 )
 
 type Service struct{ runner commandRunner }
@@ -48,6 +50,9 @@ func validate(options *Options) error {
 		}
 		options.Root = root
 	}
+	if options.Authorization != nil {
+		options.Root = options.Authorization.Path()
+	}
 	root, err := filepath.Abs(options.Root)
 	if err != nil {
 		return fmt.Errorf("resolve root: %w", err)
@@ -75,11 +80,21 @@ func validate(options *Options) error {
 			return fmt.Errorf("Gremlins accepts one package directory per run")
 		}
 		if len(options.Paths) == 1 {
-			path, err := packagePath(options.Root, options.Paths[0])
+			path, err := packagePath(options.Root, options.Paths[0], options.Authorization)
 			if err != nil {
 				return err
 			}
 			options.Paths[0] = path
+		}
+	}
+	if options.Authorization != nil && (options.Language == "csharp" || options.Language == "typescript") {
+		if len(options.Paths) == 0 {
+			return fmt.Errorf("authorized C# and TypeScript mutation runs require explicit paths")
+		}
+		for _, pattern := range options.Paths {
+			if err := authorizeMutationPattern(options.Authorization, pattern); err != nil {
+				return err
+			}
 		}
 	}
 	if options.Incremental && options.Language != "typescript" {
@@ -124,13 +139,19 @@ func (service *Service) runGremlins(ctx context.Context, options Options, output
 	return parseGremlins(data, options.MinimumScore)
 }
 
-func packagePath(root, path string) (string, error) {
+func packagePath(root, path string, authorization *rootauth.Root) (string, error) {
 	if path == "" {
 		path = "."
 	}
 	absolute, err := filepath.Abs(filepath.Join(root, path))
 	if err != nil {
 		return "", fmt.Errorf("resolve Go package path: %w", err)
+	}
+	if authorization != nil {
+		absolute, err = authorization.Existing(absolute)
+		if err != nil {
+			return "", fmt.Errorf("authorize Go package path: %w", err)
+		}
 	}
 	relative, err := filepath.Rel(root, absolute)
 	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
@@ -144,6 +165,57 @@ func packagePath(root, path string) (string, error) {
 		return "", fmt.Errorf("Go package path is not a directory: %s", path)
 	}
 	return filepath.ToSlash(relative), nil
+}
+
+func authorizeMutationPattern(authorization *rootauth.Root, pattern string) error {
+	trimmed := strings.TrimPrefix(pattern, "!")
+	if trimmed == "" || filepath.IsAbs(trimmed) || filepath.VolumeName(trimmed) != "" {
+		return fmt.Errorf("mutation path must be a relative pattern within root: %s", pattern)
+	}
+	normalized := strings.ReplaceAll(trimmed, "\\", "/")
+	if strings.ContainsAny(normalized, "{}") {
+		return fmt.Errorf("brace expansion is not allowed in authorized mutation paths: %s", pattern)
+	}
+	for _, component := range strings.Split(normalized, "/") {
+		if component == ".." {
+			return fmt.Errorf("mutation path must not escape root: %s", pattern)
+		}
+	}
+	meta := strings.IndexAny(normalized, "*?[{")
+	if meta < 0 {
+		if _, err := authorization.Existing(filepath.FromSlash(normalized)); err != nil {
+			return fmt.Errorf("authorize mutation path %q: %w", pattern, err)
+		}
+		return nil
+	}
+	prefix := normalized[:meta]
+	prefixEndedAtSeparator := strings.HasSuffix(prefix, "/")
+	prefix = strings.TrimSuffix(prefix, "/")
+	if prefix == "" {
+		prefix = "."
+	} else if !prefixEndedAtSeparator {
+		prefix = filepath.Dir(filepath.FromSlash(prefix))
+	}
+	authorizedPrefix, err := authorization.Existing(filepath.FromSlash(prefix))
+	if err != nil {
+		return fmt.Errorf("authorize mutation path %q: %w", pattern, err)
+	}
+	if err := rejectSymlinks(authorizedPrefix); err != nil {
+		return fmt.Errorf("authorize mutation path %q: %w", pattern, err)
+	}
+	return nil
+}
+
+func rejectSymlinks(root string) error {
+	return filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.Type()&os.ModeSymlink != 0 {
+			return fmt.Errorf("wildcard scope contains symlink %s", path)
+		}
+		return nil
+	})
 }
 
 func outputHasLine(output, expected string) bool {
@@ -191,7 +263,7 @@ func (service *Service) runStrykerNet(ctx context.Context, options Options, outp
 }
 
 func (service *Service) runStrykerJS(ctx context.Context, options Options, output io.Writer) (Report, error) {
-	reportPath, err := resolveReportPath(options.Root, options.ReportPath)
+	reportPath, err := resolveReportPath(options.Root, options.ReportPath, options.Authorization)
 	if err != nil {
 		return Report{}, err
 	}
@@ -215,6 +287,12 @@ func (service *Service) runStrykerJS(ctx context.Context, options Options, outpu
 	}
 	if result.ExitCode != 0 && result.ExitCode != 1 {
 		return Report{}, nativeCommandError(npxCommand(), result)
+	}
+	if options.Authorization != nil {
+		reportPath, err = options.Authorization.Existing(reportPath)
+		if err != nil {
+			return Report{}, fmt.Errorf("authorize generated StrykerJS report: %w", err)
+		}
 	}
 	current, stateErr := reportState(reportPath)
 	if stateErr != nil {
@@ -245,7 +323,7 @@ type fileState struct {
 	digest  [sha256.Size]byte
 }
 
-func resolveReportPath(root, configured string) (string, error) {
+func resolveReportPath(root, configured string, authorization *rootauth.Root) (string, error) {
 	if configured == "" {
 		configured = filepath.Join("reports", "mutation", "mutation.json")
 	}
@@ -254,6 +332,13 @@ func resolveReportPath(root, configured string) (string, error) {
 		path = filepath.Join(root, path)
 	}
 	path = filepath.Clean(path)
+	if authorization != nil {
+		var err error
+		path, err = authorization.Future(path)
+		if err != nil {
+			return "", fmt.Errorf("authorize StrykerJS report path: %w", err)
+		}
+	}
 	relative, err := filepath.Rel(root, path)
 	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
 		return "", fmt.Errorf("StrykerJS report path must be inside the project root")

@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/hbaldwin98/crap/internal/analysis"
+	"github.com/hbaldwin98/crap/internal/rootauth"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -22,8 +23,12 @@ func TestAnalyzeCodeToolReturnsStructuredReport(t *testing.T) {
 	}
 
 	ctx := context.Background()
+	policy, err := rootauth.New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
 	serverTransport, clientTransport := mcp.NewInMemoryTransports()
-	serverSession, err := New("test").Connect(ctx, serverTransport, nil)
+	serverSession, err := New("test", policy).Connect(ctx, serverTransport, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,5 +134,16 @@ func TestCompactReportSortsEqualScoresByID(t *testing.T) {
 	result := compactReport(report, "all", 20, 0)
 	if len(result.Methods) != 2 || result.Methods[0].ID != "first" || result.Methods[1].ID != "second" {
 		t.Fatalf("methods = %#v", result.Methods)
+	}
+}
+
+func TestAnalyzeRejectsRootOutsidePolicy(t *testing.T) {
+	root := t.TempDir()
+	policy, err := rootauth.New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := analyze(context.Background(), nil, AnalyzeInput{Root: t.TempDir()}, policy); err == nil {
+		t.Fatal("outside root was accepted")
 	}
 }

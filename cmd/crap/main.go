@@ -9,9 +9,11 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/hbaldwin98/crap/internal/analysis"
 	"github.com/hbaldwin98/crap/internal/mcpserver"
+	"github.com/hbaldwin98/crap/internal/rootauth"
 )
 
 const version = "0.1.0"
@@ -34,7 +36,7 @@ func main() {
 
 func run(args []string, stdout, stderr io.Writer) int {
 	if len(args) > 0 && args[0] == "mcp" {
-		return runMCP(stderr)
+		return runMCP(args[1:], stderr)
 	}
 	options, ok := parseOptions(args, stderr)
 	if !ok {
@@ -47,12 +49,50 @@ func run(args []string, stdout, stderr io.Writer) int {
 	return runAnalysis(options, stdout, stderr)
 }
 
-func runMCP(stderr io.Writer) int {
-	if err := mcpserver.Run(context.Background(), version); err != nil {
+func runMCP(args []string, stderr io.Writer) int {
+	options, ok := parseMCPOptions(args, stderr, "crap")
+	if !ok {
+		return 1
+	}
+	policy, err := rootauth.New(options.root, options.allowRoots...)
+	if err != nil {
+		fmt.Fprintf(stderr, "crap: MCP root policy: %v\n", err)
+		return 1
+	}
+	if err := mcpserver.Run(context.Background(), version, policy); err != nil {
 		fmt.Fprintf(stderr, "crap: MCP server: %v\n", err)
 		return 1
 	}
 	return 0
+}
+
+type mcpOptions struct {
+	root       string
+	allowRoots stringList
+}
+
+type stringList []string
+
+func (values *stringList) String() string { return strings.Join(*values, ",") }
+func (values *stringList) Set(value string) error {
+	*values = append(*values, value)
+	return nil
+}
+
+func parseMCPOptions(args []string, stderr io.Writer, name string) (mcpOptions, bool) {
+	flags := flag.NewFlagSet(name+" mcp", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	options := mcpOptions{}
+	flags.StringVar(&options.root, "root", "", "default authorized MCP root")
+	flags.Var(&options.allowRoots, "allow-root", "additional authorized MCP root (repeatable)")
+	if err := flags.Parse(args); err != nil {
+		return mcpOptions{}, false
+	}
+	if flags.NArg() != 0 {
+		fmt.Fprintf(stderr, "%s: mcp does not accept positional arguments\n", name)
+		return mcpOptions{}, false
+	}
+	return options, true
 }
 
 func parseOptions(args []string, stderr io.Writer) (cliOptions, bool) {

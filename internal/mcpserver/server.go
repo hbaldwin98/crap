@@ -3,10 +3,11 @@ package mcpserver
 import (
 	"context"
 	"fmt"
-	"os"
+	"math"
 	"sort"
 
 	"github.com/hbaldwin98/crap/internal/analysis"
+	"github.com/hbaldwin98/crap/internal/rootauth"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -48,22 +49,26 @@ type Page struct {
 	NextOffset   *int   `json:"nextOffset,omitempty"`
 }
 
-func Run(ctx context.Context, version string) error {
-	return New(version).Run(ctx, &mcp.StdioTransport{})
+func Run(ctx context.Context, version string, policy *rootauth.Policy) error {
+	return New(version, policy).Run(ctx, &mcp.StdioTransport{})
 }
 
-func New(version string) *mcp.Server {
+func New(version string, policy *rootauth.Policy) *mcp.Server {
 	server := mcp.NewServer(&mcp.Implementation{Name: "crap", Version: version}, &mcp.ServerOptions{
 		Instructions: "Use analyze_code whenever the user asks to run, check, or report CRAP scores or cyclomatic complexity for C#, Go, or TypeScript. Never estimate these scores yourself. Start with the default violations view or resultMode=summary. Request highest/all pages or narrower paths only when details are needed.",
 	})
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "analyze_code",
+		Title:       "Analyze CRAP scores",
 		Description: "Run this tool when asked for CRAP scores or cyclomatic complexity. It deterministically analyzes C#, Go, and TypeScript and returns compact, pageable method details; scores must not be inferred by the caller.",
-	}, analyze)
+		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true, IdempotentHint: true, OpenWorldHint: boolPointer(false), DestructiveHint: boolPointer(false)},
+	}, func(ctx context.Context, request *mcp.CallToolRequest, input AnalyzeInput) (*mcp.CallToolResult, AnalyzeOutput, error) {
+		return analyze(ctx, request, input, policy)
+	})
 	return server
 }
 
-func analyze(_ context.Context, _ *mcp.CallToolRequest, input AnalyzeInput) (*mcp.CallToolResult, AnalyzeOutput, error) {
+func analyze(_ context.Context, _ *mcp.CallToolRequest, input AnalyzeInput, policy *rootauth.Policy) (*mcp.CallToolResult, AnalyzeOutput, error) {
 	if input.Offset < 0 {
 		return nil, AnalyzeOutput{}, fmt.Errorf("offset must not be negative")
 	}
@@ -71,6 +76,11 @@ func analyze(_ context.Context, _ *mcp.CallToolRequest, input AnalyzeInput) (*mc
 	if err != nil {
 		return nil, AnalyzeOutput{}, err
 	}
+	scope, err := policy.Root(root)
+	if err != nil {
+		return nil, AnalyzeOutput{}, err
+	}
+	root = scope.Path()
 	threshold, err := analysisThreshold(input.CRAPThreshold)
 	if err != nil {
 		return nil, AnalyzeOutput{}, err
@@ -96,6 +106,7 @@ func analyze(_ context.Context, _ *mcp.CallToolRequest, input AnalyzeInput) (*mc
 		CRAPThreshold:  threshold,
 		IncludeTests:   input.IncludeTests,
 		StrictCoverage: input.StrictCoverage,
+		Authorization:  scope,
 	})
 	if err != nil {
 		return nil, AnalyzeOutput{}, err
@@ -104,21 +115,20 @@ func analyze(_ context.Context, _ *mcp.CallToolRequest, input AnalyzeInput) (*mc
 }
 
 func analysisRoot(root string) (string, error) {
-	if root != "" {
-		return root, nil
-	}
-	return os.Getwd()
+	return root, nil
 }
 
 func analysisThreshold(value *float64) (float64, error) {
 	if value == nil {
 		return 30, nil
 	}
-	if *value < 0 {
+	if math.IsNaN(*value) || math.IsInf(*value, 0) || *value < 0 {
 		return 0, fmt.Errorf("crapThreshold must not be negative")
 	}
 	return *value, nil
 }
+
+func boolPointer(value bool) *bool { return &value }
 
 func resultMode(mode string) (string, error) {
 	if mode == "" {

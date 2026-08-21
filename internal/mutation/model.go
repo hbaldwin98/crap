@@ -1,5 +1,7 @@
 package mutation
 
+import "github.com/hbaldwin98/crap/internal/rootauth"
+
 const SchemaVersion = "2"
 
 type Options struct {
@@ -10,6 +12,7 @@ type Options struct {
 	TimeoutSeconds int
 	Incremental    bool
 	ReportPath     string
+	Authorization  *rootauth.Root
 }
 
 type Report struct {

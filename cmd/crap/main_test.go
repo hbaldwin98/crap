@@ -78,3 +78,14 @@ func TestParseOptionsAcceptsStrictCoverage(t *testing.T) {
 		t.Fatalf("options = %#v, ok = %v, stderr = %s", options, ok, stderr.String())
 	}
 }
+
+func TestParseMCPOptionsRestrictsArguments(t *testing.T) {
+	var stderr bytes.Buffer
+	options, ok := parseMCPOptions([]string{"--root", "project", "--allow-root", "one", "--allow-root", "two"}, &stderr, "crap")
+	if !ok || options.root != "project" || len(options.allowRoots) != 2 {
+		t.Fatalf("options = %#v, ok = %v, stderr = %s", options, ok, stderr.String())
+	}
+	if _, ok := parseMCPOptions([]string{"unexpected"}, &stderr, "crap"); ok {
+		t.Fatal("positional MCP argument was accepted")
+	}
+}

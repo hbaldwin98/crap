@@ -161,7 +161,7 @@ A typical changed-code CI check is:
 Start the stdio server with:
 
 ```sh
-./crap mcp
+./crap mcp --root /absolute/path/to/project
 ```
 
 Example MCP client configuration:
@@ -171,19 +171,19 @@ Example MCP client configuration:
   "mcpServers": {
     "crap": {
       "command": "/absolute/path/to/crap",
-      "args": ["mcp"]
+      "args": ["mcp", "--root", "/absolute/path/to/project"]
     }
   }
 }
 ```
 
-Use an absolute executable path because an MCP client may start the server from a different working directory. On Windows, use a path such as `C:\\tools\\crap.exe` in JSON.
+Use an absolute executable path and an explicit `--root` because an MCP client may start the server from a different working directory. On Windows, use paths such as `C:\\tools\\crap.exe` and `C:\\source\\my-project` in JSON. Repeat `--allow-root PATH` to let callers select projects under additional roots. MCP requests cannot read source or coverage files outside the selected authorized root, including through existing symlinks.
 
 The server exposes one tool, `analyze_code`. Its inputs are:
 
 | Input | Type | Default | Purpose |
 | --- | --- | --- | --- |
-| `root` | string | server working directory | Resolve source paths, coverage, and Git revisions from this directory. |
+| `root` | string | server `--root` | Select an existing project inside a configured `--root` or `--allow-root`. |
 | `paths` | string array | `root` | Analyze these files or directories, relative to `root`. |
 | `coveragePath` | string | none | Read Cobertura XML or a Go coverprofile, relative to `root`. |
 | `diffBase` | string | none | Return only callables changed from this Git revision. |
@@ -311,17 +311,20 @@ crap-mutate --language typescript --minimum-score 80 --fail-on-threshold
 
 ### Mutation MCP Server
 
-Start the separate mutation server with `crap-mutate mcp`. It exposes `run_mutation_tests` with these inputs:
+Start the separate mutation server with `crap-mutate mcp --root /absolute/path/to/project`. It exposes `run_mutation_tests` with these inputs:
 
 | Input | Type | Default | Purpose |
 | --- | --- | --- | --- |
-| `root` | string | server working directory | Directory in which the native engine runs. |
+| `root` | string | server `--root` | Existing project inside a configured authorized root. |
 | `language` | string | required | `csharp`, `go`, or `typescript`. |
-| `paths` | string array | engine default | C# or TypeScript source paths/globs. |
+| `paths` | string array | Go root package | C# or TypeScript source paths/globs; required for authorized MCP runs. |
 | `minimumScore` | number | `80` | Accepted score from 0 through 100. |
 | `timeoutSeconds` | integer | `1800` | Maximum native engine runtime. |
 | `incremental` | boolean | `false` | Enable StrykerJS incremental mode. |
 | `reportPath` | string | StrykerJS default | Custom StrykerJS JSON report path inside `root`. |
+| `resultMode` | string | `actionable` | Return `summary`, `actionable`, or `all` mutants. |
+| `statuses` | string array | mode default | Override the mode with normalized status filters. |
+| `limit` | integer | `20` | Return at most this many mutants; maximum `100`. |
 
 Example MCP configuration:
 
@@ -330,11 +333,15 @@ Example MCP configuration:
   "mcpServers": {
     "mutation": {
       "command": "/absolute/path/to/crap-mutate",
-      "args": ["mcp"]
+      "args": ["mcp", "--root", "/absolute/path/to/project"]
     }
   }
 }
 ```
+
+`run_mutation_tests` executes the engine once, retains an immutable normalized report for 30 minutes, and returns a compact first page plus `reportId`. The paging envelope has `pageSchemaVersion: "1"`; the nested `schemaVersion` remains the normalized mutation report contract. Actionable mode returns survived and uncovered mutants. Use the read-only `get_mutation_results` tool with `page.nextCursor` for continuation pages, or with `reportId` and a new mode/status filter to start another view. Snapshots are bounded and may be evicted; rerun the mutation tool when a report is expired or unavailable.
+
+MCP root checks prevent caller-supplied paths and report locations from escaping configured roots, including through existing symlinks. Authorized mutation globs reject brace expansion and wildcard scopes containing symlinks. These checks are not a process sandbox or a defense against concurrent filesystem replacement: mutation engines, build scripts, and project tests execute with the server process's filesystem and network privileges. Run `crap-mutate mcp` only for trusted projects and accounts.
 
 Example tool input:
 

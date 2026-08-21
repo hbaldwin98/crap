@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/hbaldwin98/crap/internal/rootauth"
 	treesitter "github.com/tree-sitter/go-tree-sitter"
 	tree_sitter_c_sharp "github.com/tree-sitter/tree-sitter-c-sharp/bindings/go"
 	tree_sitter_go "github.com/tree-sitter/tree-sitter-go/bindings/go"
@@ -141,7 +142,10 @@ func (analyzer *Analyzer) Analyze(options Options) (Report, error) {
 	if err != nil {
 		return Report{}, fmt.Errorf("resolve root: %w", err)
 	}
-	files, err := findSourceFiles(root, options.Paths, options.IncludeTests)
+	if options.Authorization != nil {
+		root = options.Authorization.Path()
+	}
+	files, err := findSourceFiles(root, options.Paths, options.IncludeTests, options.Authorization)
 	if err != nil {
 		return Report{}, err
 	}
@@ -149,11 +153,17 @@ func (analyzer *Analyzer) Analyze(options Options) (Report, error) {
 	if coveragePath != "" && !filepath.IsAbs(coveragePath) {
 		coveragePath = filepath.Join(root, coveragePath)
 	}
+	if coveragePath != "" && options.Authorization != nil {
+		coveragePath, err = options.Authorization.Existing(coveragePath)
+		if err != nil {
+			return Report{}, fmt.Errorf("authorize coverage report: %w", err)
+		}
+	}
 	coverage, err := loadCoverage(coveragePath, root)
 	if err != nil {
 		return Report{}, err
 	}
-	changes, err := gitChangedLines(root, options.DiffBase, files, analyzer.git)
+	changes, err := gitChangedLines(root, options.DiffBase, files, analyzer.git, options.Authorization)
 	if err != nil {
 		return Report{}, err
 	}
@@ -500,16 +510,17 @@ func typescriptAssignedName(node *treesitter.Node) *treesitter.Node {
 }
 
 type sourceCollector struct {
-	includeTests bool
-	seen         map[string]bool
-	files        []string
+	includeTests  bool
+	seen          map[string]bool
+	files         []string
+	authorization *rootauth.Root
 }
 
-func findSourceFiles(root string, paths []string, includeTests bool) ([]string, error) {
+func findSourceFiles(root string, paths []string, includeTests bool, authorization *rootauth.Root) ([]string, error) {
 	if len(paths) == 0 {
 		paths = []string{"."}
 	}
-	collector := sourceCollector{includeTests: includeTests, seen: make(map[string]bool)}
+	collector := sourceCollector{includeTests: includeTests, seen: make(map[string]bool), authorization: authorization}
 	for _, requested := range paths {
 		if err := collector.add(root, requested); err != nil {
 			return nil, err
@@ -524,6 +535,13 @@ func (collector *sourceCollector) add(root, requested string) error {
 	if !filepath.IsAbs(path) {
 		path = filepath.Join(root, path)
 	}
+	if collector.authorization != nil {
+		var err error
+		path, err = collector.authorization.Existing(path)
+		if err != nil {
+			return fmt.Errorf("authorize source %s: %w", requested, err)
+		}
+	}
 	info, err := os.Stat(path)
 	if err != nil {
 		return fmt.Errorf("inspect %s: %w", requested, err)
@@ -534,8 +552,7 @@ func (collector *sourceCollector) add(root, requested string) error {
 		}
 		return nil
 	}
-	collector.collect(path)
-	return nil
+	return collector.collect(path)
 }
 
 func (collector *sourceCollector) visit(path string, entry fs.DirEntry, walkErr error) error {
@@ -546,16 +563,24 @@ func (collector *sourceCollector) visit(path string, entry fs.DirEntry, walkErr 
 		return filepath.SkipDir
 	}
 	if !entry.IsDir() {
-		collector.collect(path)
+		return collector.collect(path)
 	}
 	return nil
 }
 
-func (collector *sourceCollector) collect(path string) {
+func (collector *sourceCollector) collect(path string) error {
+	if collector.authorization != nil {
+		canonical, err := collector.authorization.Existing(path)
+		if err != nil {
+			return fmt.Errorf("authorize discovered source %s: %w", path, err)
+		}
+		path = canonical
+	}
 	if isSourceFile(path, collector.includeTests) && !collector.seen[path] {
 		collector.seen[path] = true
 		collector.files = append(collector.files, path)
 	}
+	return nil
 }
 
 func ignoredDirectory(name string) bool {

@@ -1,5 +1,7 @@
 package analysis
 
+import "github.com/hbaldwin98/crap/internal/rootauth"
+
 const SchemaVersion = "3"
 
 type Options struct {
@@ -10,6 +12,7 @@ type Options struct {
 	CRAPThreshold  float64
 	IncludeTests   bool
 	StrictCoverage bool
+	Authorization  *rootauth.Root
 }
 
 type Report struct {

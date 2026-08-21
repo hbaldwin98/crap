@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/hbaldwin98/crap/internal/rootauth"
 )
 
 type fakeRunner struct {
@@ -275,5 +277,45 @@ func writeTestFile(t *testing.T, path, content string) {
 	}
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestValidateAuthorizedMutationPaths(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "src"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	policy, err := rootauth.New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	scope, err := policy.Root("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	valid := Options{Root: root, Language: "typescript", Paths: []string{"src/**/*.ts"}, MinimumScore: 80, Authorization: scope}
+	if err := validate(&valid); err != nil {
+		t.Fatalf("valid pattern rejected: %v", err)
+	}
+	missing := Options{Root: root, Language: "typescript", MinimumScore: 80, Authorization: scope}
+	if err := validate(&missing); err == nil {
+		t.Fatal("authorized TypeScript run without explicit paths was accepted")
+	}
+	for _, pattern := range []string{"../outside/**/*.ts", filepath.Join(t.TempDir(), "*.ts")} {
+		options := Options{Root: root, Language: "typescript", Paths: []string{pattern}, MinimumScore: 80, Authorization: scope}
+		if err := validate(&options); err == nil {
+			t.Errorf("unsafe pattern %q was accepted", pattern)
+		}
+	}
+	outside := filepath.Join(t.TempDir(), "outside.ts")
+	writeTestFile(t, outside, "export const outside = true")
+	link := filepath.Join(root, "src", "outside.ts")
+	if err := os.Symlink(outside, link); err == nil {
+		for _, pattern := range []string{"src/outside.ts", "src/**/*.ts"} {
+			options := Options{Root: root, Language: "typescript", Paths: []string{pattern}, MinimumScore: 80, Authorization: scope}
+			if err := validate(&options); err == nil {
+				t.Errorf("symlinked pattern %q was accepted", pattern)
+			}
+		}
 	}
 }

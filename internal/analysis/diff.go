@@ -10,6 +10,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/hbaldwin98/crap/internal/rootauth"
 )
 
 var hunkHeader = regexp.MustCompile(`^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@`)
@@ -46,7 +48,7 @@ func (execGitRunner) Output(root string, args ...string) ([]byte, error) {
 	return output, nil
 }
 
-func gitChangedLines(root, base string, sourceFiles []string, runner gitRunner) (changedFiles, error) {
+func gitChangedLines(root, base string, sourceFiles []string, runner gitRunner, authorization ...*rootauth.Root) (changedFiles, error) {
 	if base == "" {
 		return changedFiles{}, nil
 	}
@@ -57,6 +59,12 @@ func gitChangedLines(root, base string, sourceFiles []string, runner gitRunner) 
 	repositoryRoot, err = filepath.Abs(repositoryRoot)
 	if err != nil {
 		return changedFiles{}, fmt.Errorf("resolve Git repository root: %w", err)
+	}
+	if len(authorization) > 0 && authorization[0] != nil {
+		repositoryRoot, err = authorization[0].Existing(repositoryRoot)
+		if err != nil {
+			return changedFiles{}, fmt.Errorf("authorize Git repository: %w", err)
+		}
 	}
 	baseCommit, err := gitValue(runner, repositoryRoot, "rev-parse", "--verify", "--end-of-options", base+"^{commit}")
 	if err != nil {

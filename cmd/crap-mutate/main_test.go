@@ -54,3 +54,14 @@ func TestMutationExitCode(t *testing.T) {
 		}
 	}
 }
+
+func TestParseMCPOptionsRestrictsArguments(t *testing.T) {
+	var stderr bytes.Buffer
+	options, ok := parseMCPOptions([]string{"--root", "project", "--allow-root", "other"}, &stderr, "crap-mutate")
+	if !ok || options.root != "project" || len(options.allowRoots) != 1 {
+		t.Fatalf("options = %#v, ok = %v, stderr = %s", options, ok, stderr.String())
+	}
+	if _, ok := parseMCPOptions([]string{"--unknown"}, &stderr, "crap-mutate"); ok {
+		t.Fatal("unknown MCP option was accepted")
+	}
+}

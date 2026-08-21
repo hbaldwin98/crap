@@ -9,10 +9,12 @@ import (
 	"math"
 	"os"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/hbaldwin98/crap/internal/mutation"
 	"github.com/hbaldwin98/crap/internal/mutationmcp"
+	"github.com/hbaldwin98/crap/internal/rootauth"
 )
 
 const version = "0.1.0"
@@ -29,7 +31,7 @@ func main() { os.Exit(run(os.Args[1:], os.Stdout, os.Stderr)) }
 
 func run(args []string, stdout, stderr io.Writer) int {
 	if len(args) > 0 && args[0] == "mcp" {
-		return runMCP(stderr)
+		return runMCP(args[1:], stderr)
 	}
 	options, ok := parseOptions(args, stderr)
 	if !ok {
@@ -42,12 +44,50 @@ func run(args []string, stdout, stderr io.Writer) int {
 	return runMutation(options, stdout, stderr)
 }
 
-func runMCP(stderr io.Writer) int {
-	if err := mutationmcp.Run(context.Background(), version); err != nil {
+func runMCP(args []string, stderr io.Writer) int {
+	options, ok := parseMCPOptions(args, stderr, "crap-mutate")
+	if !ok {
+		return 1
+	}
+	policy, err := rootauth.New(options.root, options.allowRoots...)
+	if err != nil {
+		fmt.Fprintf(stderr, "crap-mutate: MCP root policy: %v\n", err)
+		return 1
+	}
+	if err := mutationmcp.Run(context.Background(), version, policy); err != nil {
 		fmt.Fprintf(stderr, "crap-mutate: MCP server: %v\n", err)
 		return 1
 	}
 	return 0
+}
+
+type mcpOptions struct {
+	root       string
+	allowRoots stringList
+}
+
+type stringList []string
+
+func (values *stringList) String() string { return strings.Join(*values, ",") }
+func (values *stringList) Set(value string) error {
+	*values = append(*values, value)
+	return nil
+}
+
+func parseMCPOptions(args []string, stderr io.Writer, name string) (mcpOptions, bool) {
+	flags := flag.NewFlagSet(name+" mcp", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	options := mcpOptions{}
+	flags.StringVar(&options.root, "root", "", "default authorized MCP root")
+	flags.Var(&options.allowRoots, "allow-root", "additional authorized MCP root (repeatable)")
+	if err := flags.Parse(args); err != nil {
+		return mcpOptions{}, false
+	}
+	if flags.NArg() != 0 {
+		fmt.Fprintf(stderr, "%s: mcp does not accept positional arguments\n", name)
+		return mcpOptions{}, false
+	}
+	return options, true
 }
 
 func runMutation(options cliOptions, stdout, stderr io.Writer) int {
