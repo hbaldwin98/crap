@@ -1,8 +1,13 @@
 # crap
 
-`crap` deterministically calculates cyclomatic complexity and CRAP scores for C#, Go, TypeScript, and TSX callables. It can run as a command-line tool or an MCP stdio server.
+This repository contains two tools:
 
-The executable parses the source and calculates every score. An AI caller can choose paths, coverage, a Git diff, and a score threshold, but it does not derive or reinterpret the result.
+- `crap` deterministically calculates cyclomatic complexity and CRAP scores for C#, Go, TypeScript, and TSX callables.
+- `crap-mutate` runs a language-native mutation engine and converts its output into one stable report for C#, Go, and TypeScript.
+
+Both tools can run from the command line or as separate MCP stdio servers.
+
+The tools parse native reports or source and calculate every score. An AI caller can choose paths, coverage, a Git diff, and score thresholds, but it does not derive or reinterpret results.
 
 ## Requirements
 
@@ -17,12 +22,14 @@ Build the executable from the repository root:
 
 ```sh
 go build -o crap ./cmd/crap
+go build -o crap-mutate ./cmd/crap-mutate
 ```
 
 On Windows, an explicit `.exe` name is convenient:
 
 ```powershell
 go build -o crap.exe ./cmd/crap
+go build -o crap-mutate.exe ./cmd/crap-mutate
 ```
 
 Analyze all supported source below the current directory:
@@ -179,6 +186,9 @@ The server exposes one tool, `analyze_code`. Its inputs are:
 | `diffBase` | string | none | Return only callables changed from this Git revision. |
 | `crapThreshold` | number | `30` | Mark scores strictly greater than this value as above threshold. |
 | `includeTests` | boolean | `false` | Include Go `_test.go` and TypeScript `.spec`/`.test` files. |
+| `resultMode` | string | `violations` | Return `summary`, `violations`, `highest`, or `all` methods. |
+| `limit` | integer | `20` | Return at most this many methods; maximum `100`. |
+| `offset` | integer | `0` | Skip this many matching methods for stateless pagination. |
 
 Example tool input with a maximum allowed score of 10:
 
@@ -188,13 +198,154 @@ Example tool input with a maximum allowed score of 10:
   "paths": ["."],
   "coveragePath": "coverage.out",
   "diffBase": "origin/main",
-  "crapThreshold": 10
+  "crapThreshold": 10,
+  "resultMode": "violations",
+  "limit": 20
 }
 ```
 
-The structured response uses the same report as `crap --format json`. Check `summary.aboveThreshold` for the number of violations, `summary.maximumCrap` for the highest actual score, and each method's `aboveThreshold` field for individual violations. The MCP server returns findings rather than a process exit code.
+Every response includes the full analysis summary and a `page` object. Methods are sorted by descending CRAP score before pagination. `violations` returns only methods above the requested threshold, `highest` and `all` return all methods, and `summary` returns no methods. Use `page.nextOffset` in another call when it is not `null`; each page reruns the same deterministic analysis rather than relying on server state.
+
+Check `summary.aboveThreshold` for the violation count, `summary.maximumCrap` for the highest actual score, and each returned method's `aboveThreshold` field. Use the CLI JSON format when one complete unpaged report is required. The MCP server returns findings rather than a process exit code.
 
 `schemaVersion` identifies the JSON contract and changes when an incompatible report change is made.
+
+## Mutation Testing
+
+`crap-mutate` owns engine selection, invocation, report parsing, score normalization, sorting, and threshold evaluation. An AI caller chooses the project, language, paths, and minimum score; it does not inspect test output and invent a score.
+
+Mutation runs are not inherently deterministic. Flaky tests, timeouts, concurrency, and machine load can change engine results. For a fixed engine report, `crap-mutate` always emits the same score, counts, ordering, and JSON.
+
+### Install Engines
+
+Install only the engines needed by your projects and pin them in each project where possible.
+
+For C#, Stryker.NET currently requires the .NET 10 runtime. A local tool manifest keeps its version in source control:
+
+```sh
+dotnet new tool-manifest
+dotnet tool install dotnet-stryker
+dotnet tool restore
+```
+
+For TypeScript, initialize StrykerJS in the target project. This installs the core package and an appropriate test-runner plugin:
+
+```sh
+npm init stryker@latest
+```
+
+Commit the resulting package lock and Stryker configuration. `crap-mutate` invokes `npx --no-install`, so it will not download an unpinned package during a run.
+
+For Go, install a selected Gremlins release and put the `gremlins` executable on `PATH`. Record the selected release in project setup or CI rather than silently following the latest release.
+
+### Mutation CLI
+
+```text
+crap-mutate --language csharp|go|typescript [options] [path ...]
+crap-mutate mcp
+```
+
+Options:
+
+| Option | Default | Purpose |
+| --- | --- | --- |
+| `--language NAME` | required | Select `csharp`, `go`, or `typescript`. |
+| `--format text\|json` | `text` | Select findings-oriented text or versioned JSON. |
+| `--minimum-score SCORE` | `80` | Set the accepted score from 0 through 100. |
+| `--fail-on-threshold` | `false` | Exit with code `2` when the score is unavailable or below the minimum. |
+| `--timeout DURATION` | `30m` | Stop the engine after a Go duration such as `10m` or `1h`. |
+| `--incremental` | `false` | Enable StrykerJS incremental mode. |
+| `--report-path PATH` | StrykerJS default | Read a custom StrykerJS JSON reporter path. |
+| `--version` | | Print the wrapper version. |
+
+Run from the directory where the native engine normally runs. Stryker.NET usually runs from the C# test project, Gremlins from the Go module root, and StrykerJS from the directory containing its configuration.
+
+```sh
+# C#: paths become repeated Stryker.NET --mutate options
+crap-mutate --language csharp --minimum-score 80 --fail-on-threshold "../Example/**/*.cs"
+
+# Go: Gremlins tests the whole module
+crap-mutate --language go --minimum-score 80 --fail-on-threshold
+
+# TypeScript: paths become StrykerJS --mutate values
+crap-mutate --language typescript --minimum-score 80 --fail-on-threshold "src/**/*.ts" "!src/**/*.spec.ts"
+```
+
+Gremlins does not provide a safe include-path option, so Go accepts no path or `.`. Configure exclusions in Gremlins itself. C# and TypeScript paths use each Stryker engine's glob syntax.
+
+The text report prints survived and uncovered mutants. JSON includes every mutant and these fields:
+
+- `scoreSource: "engine"` means the engine supplied the score directly. Gremlins supplies test efficacy as `KILLED / (KILLED + LIVED)`.
+- `scoreSource: "report-statuses"` means the wrapper applied Stryker's mutation-score categories: `(Killed + Timeout) / (Killed + Timeout + Survived + NoCoverage)`.
+- Compile errors, ignored mutants, and other non-scorable statuses remain in counts but not the Stryker score denominator.
+- `passed` is true when a score exists and is greater than or equal to `minimumScore`.
+
+StrykerJS writes JSON to `reports/mutation/mutation.json` by default. If `jsonReporter.fileName` changes that location, pass the same path with `--report-path`. This must identify a `.json` file inside the project root. The wrapper verifies that StrykerJS updated the report during the current run, but it does not delete the previous report. Stryker.NET and Gremlins reports are written to temporary locations and removed after normalization.
+
+Native engine threshold exits are accepted only when the engine produced a current, valid report; `crap-mutate` then applies `minimumScore`. A timeout or cancellation always fails the run and terminates the native process tree. If Gremlins finds no mutants, the report has `score: null`, `scoreSource: "unavailable"`, zero mutants, and `passed: false`.
+
+Exit codes match the CRAP CLI: `0` for a completed run, `1` for arguments or engine/report failure, and `2` for a requested threshold failure.
+
+### Angular
+
+Use StrykerJS's Angular setup and keep Angular's mutation ignorer enabled. A minimal production-source selection is:
+
+```json
+{
+  "$schema": "./node_modules/@stryker-mutator/core/schema/stryker-schema.json",
+  "mutate": ["src/**/*.ts", "!src/**/*.spec.ts", "!src/test.ts", "!src/environments/*.ts"],
+  "ignorers": ["angular"],
+  "reporters": ["json"]
+}
+```
+
+Keep the test-runner section generated for the Angular project's Karma, Jest, or other supported setup. Then run:
+
+```sh
+crap-mutate --language typescript --minimum-score 80 --fail-on-threshold
+```
+
+### Mutation MCP Server
+
+Start the separate mutation server with `crap-mutate mcp`. It exposes `run_mutation_tests` with these inputs:
+
+| Input | Type | Default | Purpose |
+| --- | --- | --- | --- |
+| `root` | string | server working directory | Directory in which the native engine runs. |
+| `language` | string | required | `csharp`, `go`, or `typescript`. |
+| `paths` | string array | engine default | C# or TypeScript source paths/globs. |
+| `minimumScore` | number | `80` | Accepted score from 0 through 100. |
+| `timeoutSeconds` | integer | `1800` | Maximum native engine runtime. |
+| `incremental` | boolean | `false` | Enable StrykerJS incremental mode. |
+| `reportPath` | string | StrykerJS default | Custom StrykerJS JSON report path inside `root`. |
+
+Example MCP configuration:
+
+```json
+{
+  "mcpServers": {
+    "mutation": {
+      "command": "/absolute/path/to/crap-mutate",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+Example tool input:
+
+```json
+{
+  "root": "C:\\source\\angular-app",
+  "language": "typescript",
+  "paths": ["src/**/*.ts", "!src/**/*.spec.ts"],
+  "minimumScore": 80,
+  "incremental": true,
+  "timeoutSeconds": 3600
+}
+```
+
+Both MCP servers publish initialization instructions that tell capable clients when to call their tool and forbid AI-estimated scores. These instructions are guidance, not enforcement; project-level agent rules remain the reliable way to require a tool call in a specific workflow.
 
 ## Score Definition
 
@@ -230,6 +381,7 @@ Run the automated checks from the repository root:
 
 ```sh
 go test ./...
+go test -race ./internal/mutation ./internal/mutationmcp ./cmd/crap-mutate
 go vet ./...
 go build ./...
 ```
