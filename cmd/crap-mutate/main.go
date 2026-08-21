@@ -1,0 +1,141 @@
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"flag"
+	"fmt"
+	"io"
+	"math"
+	"os"
+	"sort"
+	"time"
+
+	"github.com/hbaldwin98/crap/internal/mutation"
+	"github.com/hbaldwin98/crap/internal/mutationmcp"
+)
+
+const version = "0.1.0"
+
+type cliOptions struct {
+	language, format, reportPath string
+	paths                        []string
+	minimumScore                 float64
+	timeout                      time.Duration
+	incremental, fail, version   bool
+}
+
+func main() { os.Exit(run(os.Args[1:], os.Stdout, os.Stderr)) }
+
+func run(args []string, stdout, stderr io.Writer) int {
+	if len(args) > 0 && args[0] == "mcp" {
+		if err := mutationmcp.Run(context.Background(), version); err != nil {
+			fmt.Fprintf(stderr, "crap-mutate: MCP server: %v\n", err)
+			return 1
+		}
+		return 0
+	}
+	options, ok := parseOptions(args, stderr)
+	if !ok {
+		return 1
+	}
+	if options.version {
+		fmt.Fprintln(stdout, version)
+		return 0
+	}
+	root, err := os.Getwd()
+	if err != nil {
+		fmt.Fprintf(stderr, "crap-mutate: determine working directory: %v\n", err)
+		return 1
+	}
+	report, err := mutation.NewService().Run(context.Background(), mutation.Options{
+		Root: root, Language: options.language, Paths: options.paths,
+		MinimumScore: options.minimumScore, TimeoutSeconds: int(options.timeout.Seconds()),
+		Incremental: options.incremental, ReportPath: options.reportPath,
+	}, stderr)
+	if err != nil {
+		fmt.Fprintf(stderr, "crap-mutate: %v\n", err)
+		return 1
+	}
+	if err := writeReport(stdout, report, options.format); err != nil {
+		fmt.Fprintf(stderr, "crap-mutate: write report: %v\n", err)
+		return 1
+	}
+	if options.fail && !report.Passed {
+		return 2
+	}
+	return 0
+}
+
+func parseOptions(args []string, stderr io.Writer) (cliOptions, bool) {
+	flags := flag.NewFlagSet("crap-mutate", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	options := cliOptions{}
+	flags.StringVar(&options.language, "language", "", "language to mutate: csharp, go, or typescript")
+	flags.StringVar(&options.format, "format", "text", "output format: text or json")
+	flags.Float64Var(&options.minimumScore, "minimum-score", 80, "minimum accepted mutation score")
+	flags.DurationVar(&options.timeout, "timeout", 30*time.Minute, "maximum mutation engine runtime")
+	flags.BoolVar(&options.incremental, "incremental", false, "enable StrykerJS incremental mode")
+	flags.StringVar(&options.reportPath, "report-path", "", "custom StrykerJS JSON report path")
+	flags.BoolVar(&options.fail, "fail-on-threshold", false, "exit 2 when the mutation score is below the minimum")
+	flags.BoolVar(&options.version, "version", false, "print version")
+	flags.Usage = func() { writeUsage(stderr, flags) }
+	if err := flags.Parse(args); err != nil {
+		return cliOptions{}, false
+	}
+	options.paths = flags.Args()
+	if options.version {
+		return options, true
+	}
+	if options.language != "csharp" && options.language != "go" && options.language != "typescript" {
+		fmt.Fprintln(stderr, "crap-mutate: --language must be csharp, go, or typescript")
+		return cliOptions{}, false
+	}
+	if options.format != "text" && options.format != "json" {
+		fmt.Fprintf(stderr, "crap-mutate: unsupported format %q\n", options.format)
+		return cliOptions{}, false
+	}
+	if math.IsNaN(options.minimumScore) || math.IsInf(options.minimumScore, 0) || options.minimumScore < 0 || options.minimumScore > 100 {
+		fmt.Fprintln(stderr, "crap-mutate: minimum score must be between 0 and 100")
+		return cliOptions{}, false
+	}
+	if options.timeout < time.Second {
+		fmt.Fprintln(stderr, "crap-mutate: timeout must be at least one second")
+		return cliOptions{}, false
+	}
+	return options, true
+}
+
+func writeUsage(writer io.Writer, flags *flag.FlagSet) {
+	fmt.Fprintln(writer, "Usage: crap-mutate --language csharp|go|typescript [options] [path ...]")
+	fmt.Fprintln(writer, "       crap-mutate mcp")
+	fmt.Fprintln(writer, "Run a language-native mutation engine and normalize its report.")
+	flags.PrintDefaults()
+}
+
+func writeReport(writer io.Writer, report mutation.Report, format string) error {
+	if format == "json" {
+		encoder := json.NewEncoder(writer)
+		encoder.SetIndent("", "  ")
+		return encoder.Encode(report)
+	}
+	writeText(writer, report)
+	return nil
+}
+
+func writeText(writer io.Writer, report mutation.Report) {
+	findings := append([]mutation.MutantResult(nil), report.Mutants...)
+	sort.SliceStable(findings, func(i, j int) bool { return findings[i].Status < findings[j].Status })
+	for _, mutant := range findings {
+		if mutant.Status != "survived" && mutant.Status != "noCoverage" {
+			continue
+		}
+		fmt.Fprintf(writer, "%-12s %s at %s:%d:%d\n", mutant.Status, mutant.Mutator, mutant.File, mutant.Line, mutant.Column)
+	}
+	score := "unavailable"
+	if report.Score != nil {
+		score = fmt.Sprintf("%.2f", *report.Score)
+	}
+	fmt.Fprintf(writer, "\n%s score %s; minimum %.2f; passed %t; %d mutants (%d survived, %d without coverage)\n",
+		report.Engine, score, report.MinimumScore, report.Passed, report.Summary.Total, report.Summary.Survived, report.Summary.NoCoverage)
+}
