@@ -2,8 +2,10 @@ package analysis
 
 import (
 	"bytes"
+	"context"
 	"encoding/xml"
 	"fmt"
+	"io"
 	"os"
 	"path"
 	"regexp"
@@ -50,31 +52,52 @@ type cobertura struct {
 var goCoverageLine = regexp.MustCompile(`^(.+):(\d+)\.\d+,(\d+)\.\d+\s+(\d+)\s+(\d+)$`)
 
 func loadCoverage(path, root string) (coverageData, error) {
+	return loadCoverageContext(context.Background(), path, root)
+}
+
+func loadCoverageContext(ctx context.Context, path, root string) (coverageData, error) {
+	if err := ctx.Err(); err != nil {
+		return coverageData{}, err
+	}
 	if path == "" {
 		return coverageData{}, nil
 	}
 	data, err := os.ReadFile(path)
+	if contextErr := ctx.Err(); contextErr != nil {
+		return coverageData{}, contextErr
+	}
 	if err != nil {
 		return coverageData{}, fmt.Errorf("read coverage: %w", err)
 	}
 	if bytes.HasPrefix(bytes.TrimSpace(data), []byte("mode:")) {
-		result, err := parseGoCoverage(string(data))
+		result, err := parseGoCoverageContext(ctx, string(data))
 		result.sha256 = reportcontract.SHA256(data)
 		return result, err
 	}
-	result, err := parseCobertura(data, root)
+	result, err := parseCoberturaContext(ctx, data, root)
 	result.sha256 = reportcontract.SHA256(data)
 	return result, err
 }
 
 func parseCobertura(data []byte, root string) (coverageData, error) {
+	return parseCoberturaContext(context.Background(), data, root)
+}
+
+func parseCoberturaContext(ctx context.Context, data []byte, root string) (coverageData, error) {
+	if err := ctx.Err(); err != nil {
+		return coverageData{}, err
+	}
 	var document cobertura
-	if err := xml.Unmarshal(data, &document); err != nil {
+	decoder := xml.NewDecoder(&contextReader{ctx: ctx, reader: bytes.NewReader(data)})
+	if err := decoder.Decode(&document); err != nil {
 		return coverageData{}, fmt.Errorf("parse Cobertura coverage: %w", err)
 	}
 	merged := make(map[string]map[int]bool)
 	aliases := make(map[string][]string)
 	for _, class := range document.Classes {
+		if err := ctx.Err(); err != nil {
+			return coverageData{}, err
+		}
 		filename, classAliases := coberturaIdentities(class.Filename, document.Sources, root)
 		if filename == "." || filename == "" {
 			return coverageData{}, fmt.Errorf("Cobertura class has an empty filename")
@@ -86,6 +109,9 @@ func parseCobertura(data []byte, root string) (coverageData, error) {
 			aliases[alias] = appendUnique(aliases[alias], filename)
 		}
 		for _, line := range class.Lines {
+			if err := ctx.Err(); err != nil {
+				return coverageData{}, err
+			}
 			if line.Number < 1 {
 				return coverageData{}, fmt.Errorf("Cobertura class %q has invalid line %d", class.Filename, line.Number)
 			}
@@ -98,6 +124,9 @@ func parseCobertura(data []byte, root string) (coverageData, error) {
 	}
 	result := coverageData{files: make(map[string][]coverageSpan), aliases: aliases, loaded: true, format: "cobertura"}
 	for filename, lines := range merged {
+		if err := ctx.Err(); err != nil {
+			return coverageData{}, err
+		}
 		for line, covered := range lines {
 			result.files[filename] = append(result.files[filename], coverageSpan{StartLine: line, EndLine: line, Statements: 1, Covered: covered})
 		}
@@ -168,9 +197,19 @@ func isPortableAbs(value string) bool {
 }
 
 func parseGoCoverage(content string) (coverageData, error) {
+	return parseGoCoverageContext(context.Background(), content)
+}
+
+func parseGoCoverageContext(ctx context.Context, content string) (coverageData, error) {
+	if err := ctx.Err(); err != nil {
+		return coverageData{}, err
+	}
 	result := coverageData{files: make(map[string][]coverageSpan), loaded: true, format: "go-coverprofile"}
 	lines := strings.Split(strings.TrimSpace(content), "\n")
 	for index, raw := range lines {
+		if err := ctx.Err(); err != nil {
+			return coverageData{}, err
+		}
 		line := strings.TrimSpace(raw)
 		if index == 0 && strings.HasPrefix(line, "mode:") {
 			continue
@@ -235,24 +274,42 @@ func (coverage coverageData) forFileExcluding(file string, excluded map[string]b
 }
 
 func (coverage coverageData) matchFiles(files []string) []coverageMatch {
+	matches, _ := coverage.matchFilesContext(context.Background(), files)
+	return matches
+}
+
+func (coverage coverageData) matchFilesContext(ctx context.Context, files []string) ([]coverageMatch, error) {
 	matches := make([]coverageMatch, len(files))
 	if !coverage.loaded {
 		for index := range matches {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
 			matches[index].kind = "absent"
 		}
-		return matches
+		return matches, nil
 	}
 	assigned := make([]bool, len(files))
 	claimed := make(map[string]bool)
 	for rank := 3; rank >= 1; rank-- {
 		for {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
 			candidates := make(map[int][]string)
 			claimants := make(map[string][]int)
 			for index, file := range files {
+				if err := ctx.Err(); err != nil {
+					return nil, err
+				}
 				if assigned[index] {
 					continue
 				}
-				for _, identity := range coverage.matchingIdentities(file, rank) {
+				identities, err := coverage.matchingIdentitiesContext(ctx, file, rank)
+				if err != nil {
+					return nil, err
+				}
+				for _, identity := range identities {
 					if !claimed[identity] {
 						candidates[index] = append(candidates[index], identity)
 						claimants[identity] = append(claimants[identity], index)
@@ -299,18 +356,29 @@ func (coverage coverageData) matchFiles(files []string) []coverageMatch {
 			matches[index].kind = "unmatched"
 		}
 	}
-	return matches
+	return matches, nil
 }
 
 func (coverage coverageData) matchingIdentities(file string, rank int) []string {
+	identities, _ := coverage.matchingIdentitiesContext(context.Background(), file, rank)
+	return identities
+}
+
+func (coverage coverageData) matchingIdentitiesContext(ctx context.Context, file string, rank int) ([]string, error) {
 	target := normalizePortablePath(file)
 	identities := make(map[string]bool)
 	for identity := range coverage.files {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		if pathMatchRank(identity, target) == rank {
 			identities[identity] = true
 		}
 	}
 	for alias, canonicals := range coverage.aliases {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		if pathMatchRank(alias, target) != rank {
 			continue
 		}
@@ -323,7 +391,7 @@ func (coverage coverageData) matchingIdentities(file string, rank int) []string 
 		result = append(result, identity)
 	}
 	sort.Strings(result)
-	return result
+	return result, nil
 }
 
 func pathMatchRank(candidate, target string) int {
@@ -385,11 +453,19 @@ func matchingCoveragePaths(coverage coverageData, target string, fold bool, excl
 }
 
 func methodCoverage(spans []coverageSpan, owned []lineRange) *float64 {
+	covered, _ := methodCoverageContext(context.Background(), spans, owned)
+	return covered
+}
+
+func methodCoverageContext(ctx context.Context, spans []coverageSpan, owned []lineRange) (*float64, error) {
 	if spans == nil {
-		return nil
+		return nil, nil
 	}
 	total, covered := 0, 0
 	for _, span := range spans {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		if !rangesContainSpan(owned, span.StartLine, span.EndLine) {
 			continue
 		}
@@ -399,19 +475,15 @@ func methodCoverage(spans []coverageSpan, owned []lineRange) *float64 {
 		}
 	}
 	if total == 0 {
-		return nil
+		return nil, nil
 	}
 	percent := round(float64(covered)*100/float64(total), 2)
-	return &percent
+	return &percent, nil
 }
 
 func rangesContainSpan(ranges []lineRange, start, end int) bool {
-	for _, current := range ranges {
-		if start >= current.Start && end <= current.End {
-			return true
-		}
-	}
-	return false
+	index := sort.Search(len(ranges), func(index int) bool { return ranges[index].End >= start })
+	return index < len(ranges) && start >= ranges[index].Start && end <= ranges[index].End
 }
 
 func normalizePortablePath(value string) string {
@@ -440,4 +512,16 @@ func appendUnique(values []string, value string) []string {
 		}
 	}
 	return append(values, value)
+}
+
+type contextReader struct {
+	ctx    context.Context
+	reader io.Reader
+}
+
+func (reader *contextReader) Read(data []byte) (int, error) {
+	if err := reader.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return reader.reader.Read(data)
 }

@@ -9,24 +9,17 @@ import (
 )
 
 func newTypeScriptLanguage(tsx bool) (languageDefinition, error) {
-	parser := treesitter.NewParser()
 	grammar := tree_sitter_typescript.LanguageTypescript()
-	label := "TypeScript"
 	grammarLanguage := "typescript"
 	if tsx {
 		grammar = tree_sitter_typescript.LanguageTSX()
-		label = "TSX"
 		grammarLanguage = "tsx"
-	}
-	if err := parser.SetLanguage(treesitter.NewLanguage(grammar)); err != nil {
-		parser.Close()
-		return languageDefinition{}, fmt.Errorf("load %s grammar: %w", label, err)
 	}
 	return languageDefinition{
 		name:            "typescript",
 		grammarLanguage: grammarLanguage,
 		grammarVersion:  "v0.23.2",
-		parser:          parser,
+		grammar:         treesitter.NewLanguage(grammar),
 		callableKinds: map[string]string{
 			"function_declaration":           "function",
 			"generator_function_declaration": "generator_function",

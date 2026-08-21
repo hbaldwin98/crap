@@ -5,12 +5,16 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/hbaldwin98/crap/internal/analysis"
 	"github.com/hbaldwin98/crap/internal/rootauth"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/santhosh-tekuri/jsonschema/v6"
 )
 
 func TestAnalyzeCodeToolReturnsStructuredReport(t *testing.T) {
@@ -48,8 +52,8 @@ func TestAnalyzeCodeToolReturnsStructuredReport(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(tools.Tools) != 1 || tools.Tools[0].Name != "analyze_code" {
-		t.Fatalf("tools = %#v, want analyze_code", tools.Tools)
+	if len(tools.Tools) != 2 || tools.Tools[0].Name != "analyze_code" || tools.Tools[1].Name != "get_analysis_results" {
+		t.Fatalf("tools = %#v, want analyze_code and get_analysis_results", tools.Tools)
 	}
 	result, err := clientSession.CallTool(ctx, &mcp.CallToolParams{
 		Name: "analyze_code",
@@ -84,11 +88,22 @@ func TestAnalyzeCodeToolReturnsStructuredReport(t *testing.T) {
 	if report.Page.TotalMatched != 2 || report.Page.Returned != 2 || report.Page.HasMore {
 		t.Fatalf("unexpected page: %#v", report.Page)
 	}
-	if report.SchemaVersion != "6" || report.PageSchemaVersion != "3" || report.Discovery.Selected != 2 {
+	if report.SchemaVersion != "6" || report.PageSchemaVersion != "4" || report.ReportID == "" || report.ExpiresAt == "" || report.Discovery.Selected != 2 {
 		t.Fatalf("unexpected contract or discovery metadata: %#v", report)
 	}
 	if len(report.Discovery.Exclusions) != 1 || report.Discovery.Exclusions[0].Reason != "explicit" {
 		t.Fatalf("exclude input was not propagated: %#v", report.Discovery)
+	}
+	_, sourceFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("locate analysis page schema")
+	}
+	schema, err := jsonschema.NewCompiler().Compile(filepath.Join(filepath.Dir(sourceFile), "..", "..", "schemas", "v1", "analysis-mcp-page-v4.schema.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := schema.Validate(result.StructuredContent); err != nil {
+		t.Fatalf("generated page does not validate against v4: %v", err)
 	}
 
 	if err := clientSession.Close(); err != nil {
@@ -98,6 +113,118 @@ func TestAnalyzeCodeToolReturnsStructuredReport(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+type fakeAnalyzer struct {
+	calls  *atomic.Int32
+	report analysis.Report
+}
+
+func (analyzer *fakeAnalyzer) AnalyzeContext(ctx context.Context, _ analysis.Options) (analysis.Report, error) {
+	analyzer.calls.Add(1)
+	if err := ctx.Err(); err != nil {
+		return analysis.Report{}, err
+	}
+	return analyzer.report, nil
+}
+
+func (*fakeAnalyzer) Close() {}
+
+func TestAnalysisSnapshotRunsOnceAndCursorIsBound(t *testing.T) {
+	root := t.TempDir()
+	policy, err := rootauth.New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	calls := &atomic.Int32{}
+	report := analysis.Report{SchemaVersion: "6", ReportType: "analysis", Methods: []analysis.MethodResult{{ID: "a", CRAP: 20}, {ID: "b", CRAP: 10}}}
+	store := newSnapshotStore()
+	factory := func() (analyzerExecution, error) { return &fakeAnalyzer{calls: calls, report: report}, nil }
+	_, first, err := analyzeWith(context.Background(), nil, AnalyzeInput{Root: root, ResultMode: "all", Limit: intPointer(1)}, policy, store, factory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if calls.Load() != 1 || len(first.Methods) != 1 || first.Page.NextCursor == "" {
+		t.Fatalf("first page = %#v, calls = %d", first, calls.Load())
+	}
+	source := filepath.Join(root, "source.go")
+	if err := os.WriteFile(source, []byte("package source"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(source); err != nil {
+		t.Fatal(err)
+	}
+	report.Methods[1].ID = "changed-after-snapshot"
+	second, err := getAnalysisResults(context.Background(), store, GetResultsInput{Cursor: first.Page.NextCursor})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if calls.Load() != 1 || len(second.Methods) != 1 || second.Methods[0].ID != "b" || second.ReportID != first.ReportID {
+		t.Fatalf("second page = %#v, calls = %d", second, calls.Load())
+	}
+	replacement := "A"
+	if strings.HasSuffix(first.Page.NextCursor, replacement) {
+		replacement = "B"
+	}
+	tampered := first.Page.NextCursor[:len(first.Page.NextCursor)-1] + replacement
+	if _, err := getAnalysisResults(context.Background(), store, GetResultsInput{Cursor: tampered}); err == nil {
+		t.Fatal("tampered cursor was accepted")
+	}
+	if _, err := getAnalysisResults(context.Background(), store, GetResultsInput{Cursor: first.Page.NextCursor, ReportID: first.ReportID}); err == nil {
+		t.Fatal("cursor was accepted with a mixed query")
+	}
+}
+
+func TestAnalyzeOffsetRemainsCompatible(t *testing.T) {
+	root := t.TempDir()
+	policy, err := rootauth.New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	report := analysis.Report{SchemaVersion: "6", Methods: []analysis.MethodResult{{ID: "a", CRAP: 20}, {ID: "b", CRAP: 10}}}
+	store := newSnapshotStore()
+	factory := func() (analyzerExecution, error) { return &fakeAnalyzer{calls: &atomic.Int32{}, report: report}, nil }
+	_, page, err := analyzeWith(context.Background(), nil, AnalyzeInput{Root: root, ResultMode: "all", Limit: intPointer(1), Offset: 1}, policy, store, factory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Methods) != 1 || page.Methods[0].ID != "b" || page.Page.Offset != 1 {
+		t.Fatalf("offset page = %#v", page)
+	}
+}
+
+func TestAnalysisSnapshotIsImmutableAndExpires(t *testing.T) {
+	store := newSnapshotStore()
+	now := time.Date(2026, 8, 21, 12, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return now }
+	report := analysis.Report{SchemaVersion: "6", Methods: []analysis.MethodResult{{ID: "original"}}}
+	item, err := store.put(report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	report.Methods[0].ID = "mutated"
+	page, err := getAnalysisResults(context.Background(), store, GetResultsInput{ReportID: item.id, ResultMode: "all"})
+	if err != nil || page.Methods[0].ID != "original" {
+		t.Fatalf("snapshot changed: %#v, %v", page, err)
+	}
+	now = now.Add(defaultSnapshotTTL)
+	if _, err := getAnalysisResults(context.Background(), store, GetResultsInput{ReportID: item.id}); err == nil {
+		t.Fatal("expired snapshot was returned")
+	}
+}
+
+func TestCanceledSnapshotIsNotRetained(t *testing.T) {
+	store := newSnapshotStore()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := store.putContext(ctx, analysis.Report{}); err == nil {
+		t.Fatal("canceled snapshot was retained")
+	}
+	if len(store.snapshots) != 0 || store.totalBytes != 0 {
+		t.Fatalf("canceled snapshot changed store: %#v", store)
+	}
+}
+
+func intPointer(value int) *int { return &value }
 
 func TestCompactReportDefaultsToPagedViolations(t *testing.T) {
 	methods := []analysis.MethodResult{
@@ -112,7 +239,7 @@ func TestCompactReportDefaultsToPagedViolations(t *testing.T) {
 	}
 
 	first := compactReport(report, "violations", 1, 0)
-	if len(first.Methods) != 1 || first.Methods[0].ID != "first" || first.Page.TotalMatched != 2 || !first.Page.HasMore || first.Page.NextOffset == nil || *first.Page.NextOffset != 1 {
+	if len(first.Methods) != 1 || first.Methods[0].ID != "first" || first.Page.TotalMatched != 2 || !first.Page.HasMore {
 		t.Fatalf("unexpected first page: %#v", first)
 	}
 	if first.SchemaVersion != "6" || first.PageSchemaVersion != "3" || first.DiffBaseCommit != "base" || first.DiffHeadCommit != "head" || first.DiffMergeBase != "merge" || len(first.Diagnostics) != 1 {

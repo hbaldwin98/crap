@@ -2,6 +2,7 @@ package analysis
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"io/fs"
 	"os"
@@ -22,6 +23,7 @@ type discoveryResult struct {
 }
 
 type sourceCollector struct {
+	ctx              context.Context
 	root             string
 	includeTests     bool
 	includeGenerated bool
@@ -38,10 +40,17 @@ type sourceCollector struct {
 }
 
 func findSourceFiles(root string, paths, excludes []string, includeTests, includeGenerated bool, authorization *rootauth.Root) (discoveryResult, error) {
+	return findSourceFilesContext(context.Background(), root, paths, excludes, includeTests, includeGenerated, authorization)
+}
+
+func findSourceFilesContext(ctx context.Context, root string, paths, excludes []string, includeTests, includeGenerated bool, authorization *rootauth.Root) (discoveryResult, error) {
+	if err := ctx.Err(); err != nil {
+		return discoveryResult{}, err
+	}
 	if len(paths) == 0 {
 		paths = []string{"."}
 	}
-	crapPatterns, err := readIgnoreFile(filepath.Join(root, ".crapignore"), nil, authorization)
+	crapPatterns, err := readIgnoreFileContext(ctx, filepath.Join(root, ".crapignore"), nil, authorization)
 	if err != nil {
 		return discoveryResult{}, err
 	}
@@ -54,7 +63,7 @@ func findSourceFiles(root string, paths, excludes []string, includeTests, includ
 	}
 	gitRoot := ignoreRoot(root, authorization)
 	collector := sourceCollector{
-		root: root, includeTests: includeTests, includeGenerated: includeGenerated,
+		ctx: ctx, root: root, includeTests: includeTests, includeGenerated: includeGenerated,
 		seen: make(map[string]bool), exclusionSeen: make(map[string]map[string]bool), authorization: authorization,
 		gitRoot: gitRoot, loadedGitIgnore: make(map[string]bool), crapignore: gitignore.NewMatcher(crapPatterns), excludes: gitignore.NewMatcher(excludePatterns),
 		result: discoveryResult{files: make([]string, 0), exclusions: make(map[string]int), examples: make(map[string][]string)},
@@ -63,6 +72,9 @@ func findSourceFiles(root string, paths, excludes []string, includeTests, includ
 		return discoveryResult{}, err
 	}
 	for _, requested := range paths {
+		if err := ctx.Err(); err != nil {
+			return discoveryResult{}, err
+		}
 		if err := collector.add(requested); err != nil {
 			return discoveryResult{}, err
 		}
@@ -72,6 +84,13 @@ func findSourceFiles(root string, paths, excludes []string, includeTests, includ
 }
 
 func readIgnoreFile(path string, domain []string, authorization *rootauth.Root) ([]gitignore.Pattern, error) {
+	return readIgnoreFileContext(context.Background(), path, domain, authorization)
+}
+
+func readIgnoreFileContext(ctx context.Context, path string, domain []string, authorization *rootauth.Root) ([]gitignore.Pattern, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	info, err := os.Lstat(path)
 	if os.IsNotExist(err) {
 		return nil, nil
@@ -98,6 +117,9 @@ func readIgnoreFile(path string, domain []string, authorization *rootauth.Root) 
 	patterns := make([]gitignore.Pattern, 0)
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		line := scanner.Text()
 		if strings.TrimSpace(line) == "" || strings.HasPrefix(line, "#") {
 			continue
@@ -124,6 +146,9 @@ func portableIgnoreEscapes(pattern string) string {
 }
 
 func (collector *sourceCollector) add(requested string) error {
+	if err := collector.ctx.Err(); err != nil {
+		return err
+	}
 	path := requested
 	if !filepath.IsAbs(path) {
 		path = filepath.Join(collector.root, path)
@@ -155,6 +180,9 @@ func (collector *sourceCollector) add(requested string) error {
 }
 
 func (collector *sourceCollector) visit(path string, entry fs.DirEntry, walkErr error) error {
+	if err := collector.ctx.Err(); err != nil {
+		return err
+	}
 	if walkErr != nil {
 		return walkErr
 	}
@@ -177,6 +205,9 @@ func (collector *sourceCollector) visit(path string, entry fs.DirEntry, walkErr 
 }
 
 func (collector *sourceCollector) collect(path string, explicit bool) error {
+	if err := collector.ctx.Err(); err != nil {
+		return err
+	}
 	if !supportedSource(path) {
 		return nil
 	}
@@ -299,6 +330,9 @@ func (collector *sourceCollector) loadGitIgnoreChain(directory string) error {
 		return nil
 	}
 	for _, component := range strings.Split(relative, string(filepath.Separator)) {
+		if err := collector.ctx.Err(); err != nil {
+			return err
+		}
 		current = filepath.Join(current, component)
 		if err := collector.loadGitIgnore(current); err != nil {
 			return err
@@ -320,7 +354,7 @@ func (collector *sourceCollector) loadGitIgnore(directory string) error {
 	if relative != "." {
 		domain = strings.Split(normalizePath(relative), "/")
 	}
-	patterns, err := readIgnoreFile(filepath.Join(directory, ".gitignore"), domain, collector.authorization)
+	patterns, err := readIgnoreFileContext(collector.ctx, filepath.Join(directory, ".gitignore"), domain, collector.authorization)
 	if err != nil {
 		return err
 	}

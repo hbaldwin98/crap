@@ -20,6 +20,7 @@ var contractFixtures = map[string]string{
 	"analysis-mcp-page-v1.schema.json": "analysis-mcp-page-v1.json",
 	"analysis-mcp-page-v2.schema.json": "analysis-mcp-page-v2.json",
 	"analysis-mcp-page-v3.schema.json": "analysis-mcp-page-v3.json",
+	"analysis-mcp-page-v4.schema.json": "analysis-mcp-page-v4.json",
 	"mutation-mcp-page-v2.schema.json": "mutation-mcp-page-v2.json",
 	"mutation-plan-v2.schema.json":     "mutation-plan-v2.json",
 	"mutation-doctor-v1.schema.json":   "mutation-doctor-v1.json",

@@ -187,7 +187,7 @@ Example MCP client configuration:
 
 Use an absolute executable path and an explicit `--root` because an MCP client may start the server from a different working directory. On Windows, use paths such as `C:\\tools\\crap.exe` and `C:\\source\\my-project` in JSON. Repeat `--allow-root PATH` to let callers select projects under additional roots. MCP requests cannot read source or coverage files outside the selected authorized root, including through existing symlinks.
 
-The server exposes one tool, `analyze_code`. Its inputs are:
+The server exposes `analyze_code` and `get_analysis_results`. `analyze_code` runs one analysis, stores an immutable serialized snapshot, and returns its first page. Its inputs are:
 
 | Input | Type | Default | Purpose |
 | --- | --- | --- | --- |
@@ -202,7 +202,7 @@ The server exposes one tool, `analyze_code`. Its inputs are:
 | `strictCoverage` | boolean | `false` | Fail when supplied coverage paths are unmatched or ambiguous. |
 | `resultMode` | string | `violations` | Return `summary`, `violations`, `highest`, or `all` methods. |
 | `limit` | integer | `20` | Return at most this many methods; maximum `100`. |
-| `offset` | integer | `0` | Skip this many matching methods for stateless pagination. |
+| `offset` | integer | `0` | Deprecated initial-page offset retained for compatibility; prefer continuation cursors. |
 
 Example tool input with a maximum allowed score of 10:
 
@@ -218,11 +218,11 @@ Example tool input with a maximum allowed score of 10:
 }
 ```
 
-Every response includes the full analysis summary, coverage diagnostics, and a `page` object. Methods are sorted by descending CRAP score before pagination. `violations` returns only methods above the requested threshold, `highest` and `all` return all methods, and `summary` returns no methods. Use `page.nextOffset` in another call when it is not `null`; each page reruns the same deterministic analysis rather than relying on server state.
+Every response includes `reportId`, `expiresAt`, the full analysis summary, coverage diagnostics, and a `page` object. Methods are sorted by descending CRAP score before pagination. `violations` returns only methods above the requested threshold, `highest` and `all` return all methods, and `summary` returns no methods. When `page.nextCursor` is present, pass it by itself to `get_analysis_results`. A cursor is signed and bound to its report, result mode, offset, and limit. Alternatively, the retrieval tool accepts `reportId` with a result mode and limit to start that view from its first page. The legacy `analyze_code.offset` and `page.nextOffset` fields remain available, but cursors are preferred because they continue the same immutable snapshot. Snapshot pages never rerun analysis and remain unchanged if source or coverage files are modified or deleted. Snapshots expire at `expiresAt` and may be evicted earlier by bounded server storage.
 
 Check `summary.aboveThreshold` for the violation count, `summary.maximumCrap` for the highest actual score, and each returned method's `aboveThreshold` field. Use the CLI JSON format when one complete unpaged report is required. The MCP server returns findings rather than a process exit code.
 
-The analysis CLI emits analysis report schema v6. The MCP envelope has its own `pageSchemaVersion: "3"` and `reportType: "analysis-page"` while retaining the underlying report metadata.
+The analysis CLI emits analysis report schema v6. The current MCP envelope uses `pageSchemaVersion: "4"` and `reportType: "analysis-page"`; historical page schemas v1 through v3 remain published. Canceling an analysis request stops discovery, coverage and Git work, parsing, file dispatch, and initial-page construction as soon as practical. Cancellation and deadline errors observed before snapshot insertion are preserved without returning a partial report. Snapshot insertion is the final commit point; for the same inputs and project state, `analyze_code` retains idempotent analysis semantics even though each successful call receives a new report ID.
 
 ## Mutation Testing
 

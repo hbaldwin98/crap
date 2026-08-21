@@ -1,6 +1,7 @@
 package analysis
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -30,15 +31,18 @@ type changedFiles struct {
 }
 
 type gitRunner interface {
-	Output(string, ...string) ([]byte, error)
+	Output(context.Context, string, ...string) ([]byte, error)
 }
 
 type execGitRunner struct{}
 
-func (execGitRunner) Output(root string, args ...string) ([]byte, error) {
-	command := exec.Command("git", args...)
+func (execGitRunner) Output(ctx context.Context, root string, args ...string) ([]byte, error) {
+	command := exec.CommandContext(ctx, "git", args...)
 	command.Dir = root
 	output, err := command.Output()
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
 	if exit, ok := err.(*exec.ExitError); ok {
 		return nil, fmt.Errorf("%s", strings.TrimSpace(string(exit.Stderr)))
 	}
@@ -49,10 +53,17 @@ func (execGitRunner) Output(root string, args ...string) ([]byte, error) {
 }
 
 func gitChangedLines(root, base string, sourceFiles []string, runner gitRunner, authorization ...*rootauth.Root) (changedFiles, error) {
+	return gitChangedLinesContext(context.Background(), root, base, sourceFiles, runner, authorization...)
+}
+
+func gitChangedLinesContext(ctx context.Context, root, base string, sourceFiles []string, runner gitRunner, authorization ...*rootauth.Root) (changedFiles, error) {
+	if err := ctx.Err(); err != nil {
+		return changedFiles{}, err
+	}
 	if base == "" {
 		return changedFiles{}, nil
 	}
-	repositoryRoot, err := gitValue(runner, root, "rev-parse", "--show-toplevel")
+	repositoryRoot, err := gitValue(ctx, runner, root, "rev-parse", "--show-toplevel")
 	if err != nil {
 		return changedFiles{}, fmt.Errorf("discover Git repository from %s: %w", root, err)
 	}
@@ -66,15 +77,15 @@ func gitChangedLines(root, base string, sourceFiles []string, runner gitRunner, 
 			return changedFiles{}, fmt.Errorf("authorize Git repository: %w", err)
 		}
 	}
-	baseCommit, err := gitValue(runner, repositoryRoot, "rev-parse", "--verify", "--end-of-options", base+"^{commit}")
+	baseCommit, err := gitValue(ctx, runner, repositoryRoot, "rev-parse", "--verify", "--end-of-options", base+"^{commit}")
 	if err != nil {
 		return changedFiles{}, fmt.Errorf("resolve diff base %q as a commit: %w", base, err)
 	}
-	headCommit, err := gitValue(runner, repositoryRoot, "rev-parse", "--verify", "--end-of-options", "HEAD^{commit}")
+	headCommit, err := gitValue(ctx, runner, repositoryRoot, "rev-parse", "--verify", "--end-of-options", "HEAD^{commit}")
 	if err != nil {
 		return changedFiles{}, fmt.Errorf("resolve HEAD as a commit: %w", err)
 	}
-	mergeBase, err := gitValue(runner, repositoryRoot, "merge-base", baseCommit, headCommit)
+	mergeBase, err := gitValue(ctx, runner, repositoryRoot, "merge-base", baseCommit, headCommit)
 	if err != nil {
 		return changedFiles{}, fmt.Errorf("find merge base between %s and %s: %w", baseCommit, headCommit, err)
 	}
@@ -87,13 +98,16 @@ func gitChangedLines(root, base string, sourceFiles []string, runner gitRunner, 
 		return changedFiles{RepositoryRoot: repositoryRoot, BaseCommit: baseCommit, HeadCommit: headCommit, MergeBase: mergeBase, Files: files}, nil
 	}
 	for _, batch := range batchPathspecs(pathspecs) {
+		if err := ctx.Err(); err != nil {
+			return changedFiles{}, err
+		}
 		diffArgs := []string{"diff", "--no-ext-diff", "--no-textconv", "--no-renames", "--src-prefix=a/", "--dst-prefix=b/", "--unified=0", "--no-color", mergeBase, "--"}
 		diffArgs = append(diffArgs, batch...)
-		output, err := runner.Output(repositoryRoot, diffArgs...)
+		output, err := runner.Output(ctx, repositoryRoot, diffArgs...)
 		if err != nil {
 			return changedFiles{}, fmt.Errorf("diff from merge base %s: %w", mergeBase, err)
 		}
-		parsed, err := parseDiff(string(output))
+		parsed, err := parseDiffContext(ctx, string(output))
 		if err != nil {
 			return changedFiles{}, fmt.Errorf("parse Git diff: %w", err)
 		}
@@ -104,11 +118,11 @@ func gitChangedLines(root, base string, sourceFiles []string, runner gitRunner, 
 		// untracked source so explicitly requested ignored files remain changed.
 		untrackedArgs := []string{"ls-files", "-z", "--others", "--"}
 		untrackedArgs = append(untrackedArgs, batch...)
-		untracked, err := runner.Output(repositoryRoot, untrackedArgs...)
+		untracked, err := runner.Output(ctx, repositoryRoot, untrackedArgs...)
 		if err != nil {
 			return changedFiles{}, fmt.Errorf("list untracked source files: %w", err)
 		}
-		if err := addUntrackedFiles(files, repositoryRoot, untracked); err != nil {
+		if err := addUntrackedFilesContext(ctx, files, repositoryRoot, untracked); err != nil {
 			return changedFiles{}, err
 		}
 	}
@@ -164,8 +178,8 @@ func gitSourcePathspecs(repositoryRoot string, sourceFiles []string) ([]string, 
 	return pathspecs, nil
 }
 
-func gitValue(runner gitRunner, root string, args ...string) (string, error) {
-	output, err := runner.Output(root, args...)
+func gitValue(ctx context.Context, runner gitRunner, root string, args ...string) (string, error) {
+	output, err := runner.Output(ctx, root, args...)
 	if err != nil {
 		return "", err
 	}
@@ -177,14 +191,21 @@ func gitValue(runner gitRunner, root string, args ...string) (string, error) {
 }
 
 func addUntrackedFiles(result map[string][]lineRange, repositoryRoot string, output []byte) error {
+	return addUntrackedFilesContext(context.Background(), result, repositoryRoot, output)
+}
+
+func addUntrackedFilesContext(ctx context.Context, result map[string][]lineRange, repositoryRoot string, output []byte) error {
 	for _, filename := range strings.Split(strings.TrimSuffix(string(output), "\x00"), "\x00") {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if filename == "" {
 			continue
 		}
 		if !supportedSource(filename) {
 			continue
 		}
-		if err := addUntrackedFile(result, repositoryRoot, filename); err != nil {
+		if err := addUntrackedFileContext(ctx, result, repositoryRoot, filename); err != nil {
 			return err
 		}
 	}
@@ -192,9 +213,19 @@ func addUntrackedFiles(result map[string][]lineRange, repositoryRoot string, out
 }
 
 func addUntrackedFile(result map[string][]lineRange, repositoryRoot, filename string) error {
+	return addUntrackedFileContext(context.Background(), result, repositoryRoot, filename)
+}
+
+func addUntrackedFileContext(ctx context.Context, result map[string][]lineRange, repositoryRoot, filename string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	data, err := os.ReadFile(filepath.Join(repositoryRoot, filepath.FromSlash(filename)))
 	if err != nil {
 		return fmt.Errorf("read untracked source %s: %w", filename, err)
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	lineCount := strings.Count(string(data), "\n")
 	if len(data) > 0 && data[len(data)-1] != '\n' {
@@ -208,10 +239,17 @@ func addUntrackedFile(result map[string][]lineRange, repositoryRoot, filename st
 }
 
 func parseDiff(diff string) (map[string][]lineRange, error) {
+	return parseDiffContext(context.Background(), diff)
+}
+
+func parseDiffContext(ctx context.Context, diff string) (map[string][]lineRange, error) {
 	result := make(map[string][]lineRange)
 	var currentFile string
 	oldRemaining, newRemaining := 0, 0
 	for _, line := range strings.Split(diff, "\n") {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		if oldRemaining > 0 || newRemaining > 0 {
 			switch {
 			case strings.HasPrefix(line, "\\ No newline at end of file"):
@@ -339,15 +377,9 @@ func (changes changedFiles) intersects(sourcePath string, start, end int) bool {
 	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
 		return false
 	}
-	for _, changed := range changes.Files[normalizeGitPath(relative)] {
-		if changed.Start > end {
-			return false
-		}
-		if changed.End >= start {
-			return true
-		}
-	}
-	return false
+	ranges := changes.Files[normalizeGitPath(relative)]
+	index := sort.Search(len(ranges), func(index int) bool { return ranges[index].End >= start })
+	return index < len(ranges) && ranges[index].Start <= end
 }
 
 func normalizeGitPath(value string) string {

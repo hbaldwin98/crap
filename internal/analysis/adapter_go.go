@@ -1,7 +1,6 @@
 package analysis
 
 import (
-	"fmt"
 	"strings"
 
 	treesitter "github.com/tree-sitter/go-tree-sitter"
@@ -9,16 +8,11 @@ import (
 )
 
 func newGoLanguage() (languageDefinition, error) {
-	parser := treesitter.NewParser()
-	if err := parser.SetLanguage(treesitter.NewLanguage(tree_sitter_go.Language())); err != nil {
-		parser.Close()
-		return languageDefinition{}, fmt.Errorf("load Go grammar: %w", err)
-	}
 	return languageDefinition{
 		name:            "go",
 		grammarLanguage: "go",
 		grammarVersion:  "v0.23.4",
-		parser:          parser,
+		grammar:         treesitter.NewLanguage(tree_sitter_go.Language()),
 		callableKinds: map[string]string{
 			"function_declaration": "function",
 			"method_declaration":   "method",

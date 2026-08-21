@@ -1,7 +1,6 @@
 package analysis
 
 import (
-	"fmt"
 	"strings"
 
 	treesitter "github.com/tree-sitter/go-tree-sitter"
@@ -9,16 +8,11 @@ import (
 )
 
 func newCSharpLanguage() (languageDefinition, error) {
-	parser := treesitter.NewParser()
-	if err := parser.SetLanguage(treesitter.NewLanguage(tree_sitter_c_sharp.Language())); err != nil {
-		parser.Close()
-		return languageDefinition{}, fmt.Errorf("load C# grammar: %w", err)
-	}
 	return languageDefinition{
 		name:            "csharp",
 		grammarLanguage: "csharp",
 		grammarVersion:  "v0.23.5",
-		parser:          parser,
+		grammar:         treesitter.NewLanguage(tree_sitter_c_sharp.Language()),
 		callableKinds: map[string]string{
 			"method_declaration":              "method",
 			"constructor_declaration":         "constructor",
