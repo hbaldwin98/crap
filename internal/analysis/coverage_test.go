@@ -45,6 +45,17 @@ example.com/project/sample.go:13.1,13.20 1 0
 	}
 }
 
+func TestMethodCoverageExcludesBlocksCrossingCallableOwnership(t *testing.T) {
+	spans := []coverageSpan{
+		{StartLine: 10, EndLine: 12, Statements: 3, Covered: true},
+		{StartLine: 13, EndLine: 13, Statements: 1, Covered: false},
+	}
+	got := methodCoverage(spans, []lineRange{{Start: 10, End: 10}, {Start: 13, End: 15}})
+	if got == nil || *got != 0 {
+		t.Fatalf("coverage = %v, want 0 from the fully owned block", got)
+	}
+}
+
 func TestCoveragePathMatchingRejectsAmbiguousSuffixes(t *testing.T) {
 	coverage := coverageData{loaded: true, files: map[string][]coverageSpan{
 		"first/sample.go":  {{StartLine: 1, EndLine: 1, Statements: 1, Covered: true}},

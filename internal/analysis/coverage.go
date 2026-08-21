@@ -390,7 +390,7 @@ func methodCoverage(spans []coverageSpan, owned []lineRange) *float64 {
 	}
 	total, covered := 0, 0
 	for _, span := range spans {
-		if !rangesContain(owned, span.StartLine) {
+		if !rangesContainSpan(owned, span.StartLine, span.EndLine) {
 			continue
 		}
 		total += span.Statements
@@ -405,9 +405,9 @@ func methodCoverage(spans []coverageSpan, owned []lineRange) *float64 {
 	return &percent
 }
 
-func rangesContain(ranges []lineRange, line int) bool {
+func rangesContainSpan(ranges []lineRange, start, end int) bool {
 	for _, current := range ranges {
-		if line >= current.Start && line <= current.End {
+		if start >= current.Start && end <= current.End {
 			return true
 		}
 	}

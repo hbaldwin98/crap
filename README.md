@@ -212,7 +212,7 @@ Every response includes the full analysis summary, coverage diagnostics, and a `
 
 Check `summary.aboveThreshold` for the violation count, `summary.maximumCrap` for the highest actual score, and each returned method's `aboveThreshold` field. Use the CLI JSON format when one complete unpaged report is required. The MCP server returns findings rather than a process exit code.
 
-The analysis CLI emits analysis report schema v4. The MCP envelope has its own `pageSchemaVersion: "1"` and `reportType: "analysis-page"` while retaining the underlying report metadata.
+The analysis CLI emits analysis report schema v5. The MCP envelope has its own `pageSchemaVersion: "2"` and `reportType: "analysis-page"` while retaining the underlying report metadata.
 
 ## Mutation Testing
 
@@ -368,7 +368,7 @@ Both MCP servers publish initialization instructions that tell capable clients w
 
 ## Report Contracts
 
-JSON outputs carry `reportType`, `schemaVersion`, one shared tool version, coordinate semantics, and deterministic fingerprints. Analysis is v4, mutation is v3, mutation plans are v2, and mutation doctor output has its independent v1 contract. Incompatible changes increment the contract that changed; MCP page versions are independent from their underlying report versions.
+JSON outputs carry `reportType`, `schemaVersion`, one shared tool version, coordinate semantics, and deterministic fingerprints. Analysis is v5, mutation is v3, mutation plans are v2, and mutation doctor output has its independent v1 contract. Incompatible changes increment the contract that changed; MCP page versions are independent from their underlying report versions. The v5 analysis contract adds Go function literals and C# lambdas, anonymous methods, and expression-bodied properties/indexers as independently scored callables.
 
 Coordinates are 1-based UTF-8 byte columns with exclusive ends. Analysis callable names, signatures, and ranges come from the language AST. Callable IDs hash language, normalized file path, kind, lexical signature, and same-signature occurrence, so inserting blank lines above a callable does not change its ID. Mutation wrapper IDs hash normalized file, range, mutator, and replacement; Stryker's `nativeId` and status do not affect them.
 
@@ -392,15 +392,15 @@ For example, a callable with complexity 4 and 0% coverage scores 20:
 4^2 * (1 - 0)^3 + 4 = 20
 ```
 
-Complexity starts at `1` for each callable.
+Complexity starts at `1` for each callable. Every listed branch adds exactly `1`, including each logical operator in a compound expression. Branches inside a nested callable belong only to that nested callable.
 
-C# adds one for each `if`, loop, `catch`, non-default switch label, switch expression arm, ternary, `and`/`or` pattern, and `&&`, `||`, or `??` expression. Nested C# local functions are scored separately and do not contribute branches to their containing method.
+C# callables are methods, constructors, destructors, operators, local functions, accessors, lambdas, anonymous methods, and expression-bodied properties and indexers. C# adds one for each `if`, `for`, `foreach`, `while`, `do`, `catch`, switch expression arm, ternary, `and`/`or` pattern, and `&&`, `||`, or `??` expression. Traditional switch statement labels do not add complexity. Nested callables are scored separately.
 
 The bundled C# grammar supports C# 1 through C# 13. The analyzer rejects syntax errors rather than silently producing a partial score.
 
-Go adds one for each `if`, `for`, non-default `case`, and `&&` or `||` expression.
+Go callables are functions, methods, and function literals. Go adds one for each `if`, `for`, non-default expression/type/communication `case`, and `&&` or `||` expression. Nested function literals are scored separately.
 
-TypeScript and TSX add one for each `if`, loop, `catch`, non-default `case`, ternary, and `&&`, `||`, or `??` expression. Functions, generator functions, methods, function expressions, and arrow functions are scored separately; nested callables do not add their branches to the containing callable.
+TypeScript and TSX callables are functions, generator functions, methods, function expressions, generator function expressions, and arrow functions. They add one for each `if`, `for`, `for in`/`for of`, `while`, `do`, `catch`, non-default `case`, ternary, and `&&`, `||`, or `??` expression. Nested callables are scored separately.
 
 Files and callables are sorted by normalized path and source line. JSON contains no timestamps or environment-dependent IDs. Invalid syntax fails analysis instead of returning a partial score.
 

@@ -14,8 +14,10 @@ import (
 
 var contractFixtures = map[string]string{
 	"analysis-report-v4.schema.json":   "analysis-report-v4.json",
+	"analysis-report-v5.schema.json":   "analysis-report-v5.json",
 	"mutation-report-v3.schema.json":   "mutation-report-v3.json",
 	"analysis-mcp-page-v1.schema.json": "analysis-mcp-page-v1.json",
+	"analysis-mcp-page-v2.schema.json": "analysis-mcp-page-v2.json",
 	"mutation-mcp-page-v2.schema.json": "mutation-mcp-page-v2.json",
 	"mutation-plan-v2.schema.json":     "mutation-plan-v2.json",
 	"mutation-doctor-v1.schema.json":   "mutation-doctor-v1.json",
@@ -45,7 +47,7 @@ func TestGeneratedAnalysisAndPlanValidate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	validateValue(t, filepath.Join(root, "schemas", "v1", "analysis-report-v4.schema.json"), report)
+	validateValue(t, filepath.Join(root, "schemas", "v1", "analysis-report-v5.schema.json"), report)
 
 	plan, err := mutation.NewService().Plan(mutation.Options{Root: project, Language: "go", Paths: []string{"."}, MinimumScore: 80, TimeoutSeconds: 60})
 	if err != nil {
@@ -56,8 +58,8 @@ func TestGeneratedAnalysisAndPlanValidate(t *testing.T) {
 
 func TestSchemasRejectInvalidContracts(t *testing.T) {
 	root := repositoryRoot(t)
-	schema := compileSchema(t, filepath.Join(root, "schemas", "v1", "analysis-report-v4.schema.json"))
-	fixture := filepath.Join(root, "testdata", "contracts", "analysis-report-v4.json")
+	schema := compileSchema(t, filepath.Join(root, "schemas", "v1", "analysis-report-v5.schema.json"))
+	fixture := filepath.Join(root, "testdata", "contracts", "analysis-report-v5.json")
 	tests := map[string]func(map[string]any){
 		"version":          func(value map[string]any) { value["schemaVersion"] = "3" },
 		"unknown property": func(value map[string]any) { value["timestamp"] = "2026-01-01T00:00:00Z" },

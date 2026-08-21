@@ -5,7 +5,7 @@ import (
 	"github.com/hbaldwin98/crap/internal/rootauth"
 )
 
-const SchemaVersion = "4"
+const SchemaVersion = "5"
 
 type Options struct {
 	Paths          []string

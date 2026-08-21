@@ -1,0 +1,10 @@
+{
+  "schemaVersion": "5", "reportType": "analysis",
+  "tool": {"name": "crap", "version": "0.2.0", "modified": false},
+  "fingerprints": {"sources": [{"path": "src/work.go", "sha256": "0000000000000000000000000000000000000000000000000000000000000000"}], "coverage": null, "nativeReport": null, "git": null, "configSha256": "1111111111111111111111111111111111111111111111111111111111111111"},
+  "coordinates": {"lineBase": 1, "columnBase": 1, "columnEncoding": "utf-8-bytes", "end": "exclusive"},
+  "grammars": [{"language": "go", "version": "v0.23.4"}], "mode": "all", "coverage": {"format": "none"}, "threshold": 30,
+  "summary": {"files": 1, "methods": 1, "changedMethods": 0, "aboveThreshold": 0, "averageComplexity": 1, "averageCrap": 2, "maximumCrap": 2},
+  "methods": [{"id": "2222222222222222222222222222222222222222222222222222222222222222", "language": "go", "file": "src/work.go", "name": "work.Run", "kind": "function", "signature": "func Run()", "startLine": 3, "startColumn": 1, "endLine": 5, "endColumn": 2, "complexity": 1, "coveragePercent": null, "crap": 2, "changed": false, "aboveThreshold": false}],
+  "diagnostics": []
+}

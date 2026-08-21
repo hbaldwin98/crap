@@ -189,7 +189,7 @@ func compactReport(report analysis.Report, mode string, limit, offset int) Analy
 		page.NextOffset = &next
 	}
 	return AnalyzeOutput{
-		PageSchemaVersion: "1", ReportType: "analysis-page", SchemaVersion: report.SchemaVersion,
+		PageSchemaVersion: "2", ReportType: "analysis-page", SchemaVersion: report.SchemaVersion,
 		Tool: report.Tool, Fingerprints: report.Fingerprints, Coordinates: report.Coordinates, Grammars: append(make([]analysis.GrammarIdentity, 0, len(report.Grammars)), report.Grammars...),
 		Mode: report.Mode, Coverage: report.Coverage,
 		DiffBase: report.DiffBase, DiffBaseCommit: report.DiffBaseCommit,

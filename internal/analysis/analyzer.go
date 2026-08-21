@@ -13,73 +13,37 @@ import (
 	"github.com/hbaldwin98/crap/internal/reportcontract"
 	"github.com/hbaldwin98/crap/internal/rootauth"
 	treesitter "github.com/tree-sitter/go-tree-sitter"
-	tree_sitter_c_sharp "github.com/tree-sitter/tree-sitter-c-sharp/bindings/go"
-	tree_sitter_go "github.com/tree-sitter/tree-sitter-go/bindings/go"
-	tree_sitter_typescript "github.com/tree-sitter/tree-sitter-typescript/bindings/go"
 )
 
-var csharpCallableKinds = map[string]string{
-	"method_declaration":              "method",
-	"constructor_declaration":         "constructor",
-	"destructor_declaration":          "destructor",
-	"operator_declaration":            "operator",
-	"conversion_operator_declaration": "conversion_operator",
-	"local_function_statement":        "local_function",
-	"accessor_declaration":            "accessor",
-}
-
-var csharpBranchKinds = map[string]bool{
-	"if_statement":              true,
-	"for_statement":             true,
-	"foreach_statement":         true,
-	"while_statement":           true,
-	"do_statement":              true,
-	"catch_clause":              true,
-	"conditional_expression":    true,
-	"case_switch_label":         true,
-	"case_pattern_switch_label": true,
-	"switch_expression_arm":     true,
-	"and_pattern":               true,
-	"or_pattern":                true,
-}
-
-var goCallableKinds = map[string]string{
-	"function_declaration": "function",
-	"method_declaration":   "method",
-}
-
-var goBranchKinds = map[string]bool{
-	"if_statement":  true,
-	"for_statement": true,
-}
-
-var typescriptCallableKinds = map[string]string{
-	"function_declaration":           "function",
-	"generator_function_declaration": "generator_function",
-	"function_expression":            "function",
-	"generator_function":             "generator_function",
-	"arrow_function":                 "arrow_function",
-	"method_definition":              "method",
-}
-
-var typescriptBranchKinds = map[string]bool{
-	"if_statement":       true,
-	"for_statement":      true,
-	"for_in_statement":   true,
-	"while_statement":    true,
-	"do_statement":       true,
-	"catch_clause":       true,
-	"switch_case":        true,
-	"ternary_expression": true,
-}
-
 type languageDefinition struct {
-	name          string
-	parser        *treesitter.Parser
-	callableKinds map[string]string
-	branchKinds   map[string]bool
-	logicalOps    map[string]bool
-	qualifiedName func(*treesitter.Node, []byte) string
+	name            string
+	grammarLanguage string
+	grammarVersion  string
+	parser          *treesitter.Parser
+	callableKinds   map[string]string
+	branchKinds     map[string]bool
+	logicalOps      map[string]bool
+	callable        func(*treesitter.Node) bool
+	body            func(*treesitter.Node) *treesitter.Node
+	extraBranch     func(*treesitter.Node, []byte) bool
+	qualifiedName   func(*treesitter.Node, []byte) string
+	ownerName       func(*treesitter.Node, []byte) string
+}
+
+func (language languageDefinition) callableKind(node *treesitter.Node) (string, bool) {
+	kind, ok := language.callableKinds[node.Kind()]
+	return kind, ok && (language.callable == nil || language.callable(node))
+}
+
+func (language languageDefinition) callableBody(node *treesitter.Node) *treesitter.Node {
+	if language.body != nil {
+		return language.body(node)
+	}
+	return node.ChildByFieldName("body")
+}
+
+func (language languageDefinition) isBranch(node *treesitter.Node, source []byte) bool {
+	return language.branchKinds[node.Kind()] || (language.extraBranch != nil && language.extraBranch(node, source))
 }
 
 type Analyzer struct {
@@ -88,50 +52,27 @@ type Analyzer struct {
 }
 
 func NewAnalyzer() (*Analyzer, error) {
-	csharpParser := treesitter.NewParser()
-	if err := csharpParser.SetLanguage(treesitter.NewLanguage(tree_sitter_c_sharp.Language())); err != nil {
-		csharpParser.Close()
-		return nil, fmt.Errorf("load C# grammar: %w", err)
+	languages := make(map[string]languageDefinition, 4)
+	definitions := []struct {
+		extension string
+		load      func() (languageDefinition, error)
+	}{
+		{".cs", newCSharpLanguage},
+		{".go", newGoLanguage},
+		{".ts", func() (languageDefinition, error) { return newTypeScriptLanguage(false) }},
+		{".tsx", func() (languageDefinition, error) { return newTypeScriptLanguage(true) }},
 	}
-	goParser := treesitter.NewParser()
-	if err := goParser.SetLanguage(treesitter.NewLanguage(tree_sitter_go.Language())); err != nil {
-		csharpParser.Close()
-		goParser.Close()
-		return nil, fmt.Errorf("load Go grammar: %w", err)
+	for _, definition := range definitions {
+		language, err := definition.load()
+		if err != nil {
+			for _, loaded := range languages {
+				loaded.parser.Close()
+			}
+			return nil, err
+		}
+		languages[definition.extension] = language
 	}
-	typescriptParser := treesitter.NewParser()
-	if err := typescriptParser.SetLanguage(treesitter.NewLanguage(tree_sitter_typescript.LanguageTypescript())); err != nil {
-		csharpParser.Close()
-		goParser.Close()
-		typescriptParser.Close()
-		return nil, fmt.Errorf("load TypeScript grammar: %w", err)
-	}
-	tsxParser := treesitter.NewParser()
-	if err := tsxParser.SetLanguage(treesitter.NewLanguage(tree_sitter_typescript.LanguageTSX())); err != nil {
-		csharpParser.Close()
-		goParser.Close()
-		typescriptParser.Close()
-		tsxParser.Close()
-		return nil, fmt.Errorf("load TSX grammar: %w", err)
-	}
-	return &Analyzer{languages: map[string]languageDefinition{
-		".cs": {
-			name: "csharp", parser: csharpParser, callableKinds: csharpCallableKinds, branchKinds: csharpBranchKinds,
-			logicalOps: map[string]bool{"&&": true, "||": true, "??": true}, qualifiedName: csharpQualifiedName,
-		},
-		".go": {
-			name: "go", parser: goParser, callableKinds: goCallableKinds, branchKinds: goBranchKinds,
-			logicalOps: map[string]bool{"&&": true, "||": true}, qualifiedName: goQualifiedName,
-		},
-		".ts": {
-			name: "typescript", parser: typescriptParser, callableKinds: typescriptCallableKinds, branchKinds: typescriptBranchKinds,
-			logicalOps: map[string]bool{"&&": true, "||": true, "??": true}, qualifiedName: typescriptQualifiedName,
-		},
-		".tsx": {
-			name: "typescript", parser: tsxParser, callableKinds: typescriptCallableKinds, branchKinds: typescriptBranchKinds,
-			logicalOps: map[string]bool{"&&": true, "||": true, "??": true}, qualifiedName: typescriptQualifiedName,
-		},
-	}, git: execGitRunner{}}, nil
+	return &Analyzer{languages: languages, git: execGitRunner{}}, nil
 }
 
 func (analyzer *Analyzer) Close() {
@@ -238,14 +179,9 @@ func (analyzer *Analyzer) Analyze(options Options) (Report, error) {
 		IncludeTests   bool     `json:"includeTests"`
 		StrictCoverage bool     `json:"strictCoverage"`
 	}{configPaths, options.DiffBase, options.CRAPThreshold, options.IncludeTests, options.StrictCoverage})
-	grammarVersions := map[string]GrammarIdentity{
-		".cs":  {Language: "csharp", Version: "v0.23.5"},
-		".go":  {Language: "go", Version: "v0.23.4"},
-		".ts":  {Language: "typescript", Version: "v0.23.2"},
-		".tsx": {Language: "tsx", Version: "v0.23.2"},
-	}
 	for extension := range usedGrammars {
-		report.Grammars = append(report.Grammars, grammarVersions[extension])
+		language := analyzer.languages[extension]
+		report.Grammars = append(report.Grammars, GrammarIdentity{Language: language.grammarLanguage, Version: language.grammarVersion})
 	}
 	sort.Slice(report.Grammars, func(i, j int) bool { return report.Grammars[i].Language < report.Grammars[j].Language })
 	coverageMatches := coverage.matchFiles(relativeFiles)
@@ -299,8 +235,8 @@ func (analyzer *Analyzer) analyzeFile(path, relative string, source []byte, matc
 	results := make([]MethodResult, 0, len(callables))
 	occurrences := make(map[string]int)
 	for index, callable := range callables {
-		signature := lexicalSignature(callable.node, source)
-		identity := callableIdentity(callable.node, source)
+		signature := lexicalSignature(callable.node, source, language)
+		identity := callableIdentity(callable.node, source, language)
 		owner := language.qualifiedName(callable.node, source)
 		ownerIdentity := owner
 		if strings.Contains(ownerIdentity, "<anonymous@") {
@@ -342,7 +278,7 @@ type callableNode struct {
 }
 
 func collectCallableNodes(node *treesitter.Node, language languageDefinition, depth int, results *[]callableNode) {
-	if kind, ok := language.callableKinds[node.Kind()]; ok {
+	if kind, ok := language.callableKind(node); ok {
 		*results = append(*results, callableNode{node: node, kind: kind, depth: depth})
 		depth++
 	}
@@ -380,24 +316,23 @@ func resultForNode(node *treesitter.Node, source []byte, sourcePath, file, kind,
 	}
 }
 
-func lexicalSignature(node *treesitter.Node, source []byte) string {
+func lexicalSignature(node *treesitter.Node, source []byte, language languageDefinition) string {
 	end := node.EndByte()
-	if body := node.ChildByFieldName("body"); body != nil {
+	if body := language.callableBody(node); body != nil {
 		end = body.StartByte()
 	}
 	return strings.Join(strings.Fields(string(source[node.StartByte():end])), " ")
 }
 
-func callableIdentity(node *treesitter.Node, source []byte) string {
-	return callableStructuralIdentity(node, source, true)
+func callableIdentity(node *treesitter.Node, source []byte, language languageDefinition) string {
+	return callableStructuralIdentity(node, source, language.callableBody(node))
 }
 
-func callableStructuralIdentity(node *treesitter.Node, source []byte, excludeBody bool) string {
+func callableStructuralIdentity(node *treesitter.Node, source []byte, body *treesitter.Node) string {
 	var identity strings.Builder
-	body := node.ChildByFieldName("body")
 	var visit func(*treesitter.Node)
 	visit = func(current *treesitter.Node) {
-		if excludeBody && body != nil && current.StartByte() == body.StartByte() && current.EndByte() == body.EndByte() {
+		if body != nil && current.StartByte() == body.StartByte() && current.EndByte() == body.EndByte() {
 			return
 		}
 		if strings.Contains(current.Kind(), "comment") {
@@ -429,18 +364,15 @@ func callableOwnerIdentity(node *treesitter.Node, source []byte, language langua
 		}
 	}
 	for parent := node.Parent(); parent != nil; parent = parent.Parent() {
-		if _, ok := language.callableKinds[parent.Kind()]; ok {
-			add(language.qualifiedName(parent, source))
+		if _, ok := language.callableKind(parent); ok {
+			name := language.qualifiedName(parent, source)
+			if strings.Contains(name, "<anonymous@") {
+				name = "anonymous"
+			}
+			add("callable:" + name + ":" + callableIdentity(parent, source, language))
 		}
-		switch parent.Kind() {
-		case "variable_declarator", "public_field_definition":
-			add(nodeSource(parent.ChildByFieldName("name"), source))
-		case "pair":
-			add(nodeSource(parent.ChildByFieldName("key"), source))
-		case "assignment_expression":
-			add(nodeSource(parent.ChildByFieldName("left"), source))
-		case "class_declaration", "interface_declaration", "namespace_declaration", "module", "function_declaration", "method_definition":
-			add(nodeSource(parent.ChildByFieldName("name"), source))
+		if language.ownerName != nil {
+			add(language.ownerName(parent, source))
 		}
 	}
 	if len(parts) == 0 {
@@ -500,11 +432,11 @@ func complexity(root *treesitter.Node, source []byte, language languageDefinitio
 	var visit func(*treesitter.Node, bool)
 	visit = func(node *treesitter.Node, isRoot bool) {
 		if !isRoot {
-			if _, nestedCallable := language.callableKinds[node.Kind()]; nestedCallable {
+			if _, nestedCallable := language.callableKind(node); nestedCallable {
 				return
 			}
 		}
-		if language.branchKinds[node.Kind()] || isNonDefaultGoCase(node, source, language.name) {
+		if language.isBranch(node, source) {
 			value++
 		}
 		if node.Kind() == "binary_expression" {
@@ -521,136 +453,6 @@ func complexity(root *treesitter.Node, source []byte, language languageDefinitio
 	}
 	visit(root, true)
 	return value
-}
-
-func isNonDefaultGoCase(node *treesitter.Node, source []byte, language string) bool {
-	if language != "go" || (node.Kind() != "expression_case" && node.Kind() != "type_case" && node.Kind() != "communication_case") {
-		return false
-	}
-	return !strings.HasPrefix(strings.TrimSpace(node.Utf8Text(source)), "default")
-}
-
-func csharpQualifiedName(node *treesitter.Node, source []byte) string {
-	parts := make([]string, 0)
-	root := node
-	for parent := node.Parent(); parent != nil; parent = parent.Parent() {
-		root = parent
-		switch parent.Kind() {
-		case "namespace_declaration", "file_scoped_namespace_declaration", "class_declaration", "struct_declaration", "record_declaration", "interface_declaration":
-			if name := parent.ChildByFieldName("name"); name != nil {
-				parts = append(parts, name.Utf8Text(source))
-			}
-		}
-	}
-	// The grammar represents a file-scoped namespace as a sibling of its types.
-	for index := uint(0); index < root.NamedChildCount(); index++ {
-		child := root.NamedChild(index)
-		if child.Kind() == "file_scoped_namespace_declaration" {
-			if name := child.ChildByFieldName("name"); name != nil {
-				parts = append(parts, name.Utf8Text(source))
-			}
-			break
-		}
-	}
-	for left, right := 0, len(parts)-1; left < right; left, right = left+1, right-1 {
-		parts[left], parts[right] = parts[right], parts[left]
-	}
-
-	name := node.ChildByFieldName("name")
-	methodName := node.Kind()
-	if name != nil {
-		methodName = name.Utf8Text(source)
-	}
-	if node.Kind() == "accessor_declaration" {
-		owner := node.Parent()
-		if owner != nil {
-			owner = owner.Parent()
-		}
-		if owner != nil {
-			if ownerName := owner.ChildByFieldName("name"); ownerName != nil {
-				methodName = ownerName.Utf8Text(source) + "." + methodName
-			}
-		}
-	}
-	parts = append(parts, methodName)
-	return strings.Join(parts, ".")
-}
-
-func goQualifiedName(node *treesitter.Node, source []byte) string {
-	root := node
-	for root.Parent() != nil {
-		root = root.Parent()
-	}
-	parts := make([]string, 0, 3)
-	for index := uint(0); index < root.NamedChildCount(); index++ {
-		child := root.NamedChild(index)
-		if child.Kind() == "package_clause" && child.NamedChildCount() > 0 {
-			parts = append(parts, child.NamedChild(0).Utf8Text(source))
-			break
-		}
-	}
-	if receiver := node.ChildByFieldName("receiver"); receiver != nil {
-		text := strings.TrimSpace(receiver.Utf8Text(source))
-		text = strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(text, "("), ")"))
-		fields := strings.Fields(text)
-		if len(fields) > 0 {
-			parts = append(parts, "("+fields[len(fields)-1]+")")
-		}
-	}
-	name := node.ChildByFieldName("name")
-	if name != nil {
-		parts = append(parts, name.Utf8Text(source))
-	} else {
-		parts = append(parts, node.Kind())
-	}
-	return strings.Join(parts, ".")
-}
-
-func typescriptQualifiedName(node *treesitter.Node, source []byte) string {
-	name := node.ChildByFieldName("name")
-	if name == nil {
-		name = typescriptAssignedName(node)
-	}
-	callableName := "<anonymous>"
-	if name != nil {
-		callableName = strings.TrimSpace(name.Utf8Text(source))
-	} else {
-		position := node.StartPosition()
-		callableName = fmt.Sprintf("<anonymous@%d:%d>", position.Row+1, position.Column+1)
-	}
-
-	parts := make([]string, 0, 3)
-	for parent := node.Parent(); parent != nil; parent = parent.Parent() {
-		switch parent.Kind() {
-		case "class_declaration", "abstract_class_declaration", "internal_module":
-			if parentName := parent.ChildByFieldName("name"); parentName != nil {
-				parts = append(parts, parentName.Utf8Text(source))
-			}
-		}
-	}
-	for left, right := 0, len(parts)-1; left < right; left, right = left+1, right-1 {
-		parts[left], parts[right] = parts[right], parts[left]
-	}
-	parts = append(parts, callableName)
-	return strings.Join(parts, ".")
-}
-
-func typescriptAssignedName(node *treesitter.Node) *treesitter.Node {
-	for parent := node.Parent(); parent != nil; parent = parent.Parent() {
-		switch parent.Kind() {
-		case "variable_declarator", "public_field_definition":
-			return parent.ChildByFieldName("name")
-		case "pair":
-			return parent.ChildByFieldName("key")
-		case "assignment_expression":
-			return parent.ChildByFieldName("left")
-		case "parenthesized_expression", "as_expression", "satisfies_expression", "type_assertion", "non_null_expression":
-			continue
-		default:
-			return nil
-		}
-	}
-	return nil
 }
 
 type sourceCollector struct {
