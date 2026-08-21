@@ -20,6 +20,21 @@ type fakeExecutor struct {
 	err      error
 }
 
+type fakeInspector struct {
+	received mutation.Options
+}
+
+func (inspect *fakeInspector) Plan(options mutation.Options) (mutation.Plan, error) {
+	inspect.received = options
+	return mutation.Plan{SchemaVersion: "1", Root: options.Root, Language: options.Language, Engine: "stryker-js", Executable: "npx", Arguments: []string{"stryker", "run"}}, nil
+}
+
+func (inspect *fakeInspector) Doctor(_ context.Context, options mutation.Options) (mutation.DoctorReport, error) {
+	inspect.received = options
+	plan, _ := inspect.Plan(options)
+	return mutation.DoctorReport{SchemaVersion: "1", Plan: plan, Ready: true}, nil
+}
+
 func (executor *fakeExecutor) Run(_ context.Context, options mutation.Options, _ io.Writer) (mutation.Report, error) {
 	executor.received = options
 	if executor.report.SchemaVersion != "" || executor.err != nil {
@@ -48,9 +63,10 @@ func policyFor(t *testing.T, root string) *rootauth.Policy {
 func TestRunMutationTestsToolReturnsPagedStructuredReport(t *testing.T) {
 	root := t.TempDir()
 	executor := &fakeExecutor{}
+	inspect := &fakeInspector{}
 	ctx := context.Background()
 	serverTransport, clientTransport := mcp.NewInMemoryTransports()
-	serverSession, err := newServer("test", executor, policyFor(t, root), newSnapshotStore()).Connect(ctx, serverTransport, nil)
+	serverSession, err := newServerWithInspector("test", executor, inspect, policyFor(t, root), newSnapshotStore()).Connect(ctx, serverTransport, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,8 +82,11 @@ func TestRunMutationTestsToolReturnsPagedStructuredReport(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(tools.Tools) != 2 || tools.Tools[0].Name != "get_mutation_results" || tools.Tools[1].Name != "run_mutation_tests" {
+	if len(tools.Tools) != 4 || tools.Tools[0].Name != "check_mutation_setup" || tools.Tools[1].Name != "get_mutation_results" || tools.Tools[2].Name != "plan_mutation_run" || tools.Tools[3].Name != "run_mutation_tests" {
 		t.Fatalf("tools = %#v", tools.Tools)
+	}
+	if tools.Tools[0].Annotations == nil || tools.Tools[0].Annotations.ReadOnlyHint || tools.Tools[0].Annotations.IdempotentHint || tools.Tools[0].Annotations.DestructiveHint == nil || !*tools.Tools[0].Annotations.DestructiveHint {
+		t.Fatalf("version probe must not be advertised as read-only: %#v", tools.Tools[0])
 	}
 	result, err := clientSession.CallTool(ctx, &mcp.CallToolParams{Name: "run_mutation_tests", Arguments: map[string]any{
 		"language": "typescript", "paths": []string{"src/work.ts"}, "minimumScore": 85, "limit": 1,
@@ -88,6 +107,20 @@ func TestRunMutationTestsToolReturnsPagedStructuredReport(t *testing.T) {
 	}
 	if executor.received.MinimumScore != 85 || executor.received.Paths[0] != "src/work.ts" || executor.received.Authorization == nil {
 		t.Fatalf("options = %#v", executor.received)
+	}
+	planned, err := clientSession.CallTool(ctx, &mcp.CallToolParams{Name: "plan_mutation_run", Arguments: map[string]any{
+		"language": "typescript", "paths": []string{"src/work.ts"},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, _ = json.Marshal(planned.StructuredContent)
+	var plan mutation.Plan
+	if err := json.Unmarshal(data, &plan); err != nil {
+		t.Fatal(err)
+	}
+	if plan.Engine != "stryker-js" || inspect.received.Authorization == nil {
+		t.Fatalf("plan = %#v, options = %#v", plan, inspect.received)
 	}
 	second, err := clientSession.CallTool(ctx, &mcp.CallToolParams{Name: "get_mutation_results", Arguments: map[string]any{"cursor": output.Page.NextCursor}})
 	if err != nil {

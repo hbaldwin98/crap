@@ -7,6 +7,7 @@ import (
 	"io"
 	"math"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -17,9 +18,12 @@ import (
 	"github.com/hbaldwin98/crap/internal/rootauth"
 )
 
-type Service struct{ runner commandRunner }
+type Service struct {
+	runner   commandRunner
+	lookPath func(string) (string, error)
+}
 
-func NewService() *Service { return &Service{runner: execRunner{}} }
+func NewService() *Service { return &Service{runner: execRunner{}, lookPath: exec.LookPath} }
 
 func (service *Service) Run(ctx context.Context, options Options, output io.Writer) (Report, error) {
 	if output == nil {
@@ -66,6 +70,9 @@ func validate(options *Options) error {
 	}
 	options.Root = root
 	options.Language = strings.ToLower(options.Language)
+	if options.Language != "csharp" && options.Language != "go" && options.Language != "typescript" {
+		return fmt.Errorf("unsupported language %q", options.Language)
+	}
 	if math.IsNaN(options.MinimumScore) || math.IsInf(options.MinimumScore, 0) || options.MinimumScore < 0 || options.MinimumScore > 100 {
 		return fmt.Errorf("minimum score must be between 0 and 100")
 	}
@@ -111,12 +118,9 @@ func (service *Service) runGremlins(ctx context.Context, options Options, output
 	defer os.RemoveAll(directory)
 	reportPath := filepath.Join(directory, "mutation.json")
 	engineOutput := &tailBuffer{limit: capturedOutputLimit}
-	args := []string{"unleash"}
-	if len(options.Paths) == 1 {
-		args = append(args, options.Paths[0])
-	}
-	args = append(args, "--output", reportPath, "--threshold-efficacy", "0", "--threshold-mcover", "0")
-	result, runErr := service.runner.Run(ctx, options.Root, "gremlins", args, io.MultiWriter(output, engineOutput))
+	name, plannedArgs, _ := commandPlan(options, temporaryReportPath)
+	args := replaceReportPath(plannedArgs, reportPath)
+	result, runErr := service.runner.Run(ctx, options.Root, name, args, io.MultiWriter(output, engineOutput))
 	if ctx.Err() != nil {
 		return Report{}, commandError(ctx, runErr)
 	}
@@ -233,11 +237,9 @@ func (service *Service) runStrykerNet(ctx context.Context, options Options, outp
 		return Report{}, err
 	}
 	defer os.RemoveAll(directory)
-	args := []string{"stryker", "--reporter", "json", "--output", directory, "--break-at", "0"}
-	for _, path := range options.Paths {
-		args = append(args, "--mutate", filepath.ToSlash(path))
-	}
-	result, runErr := service.runner.Run(ctx, options.Root, "dotnet", args, output)
+	name, plannedArgs, _ := commandPlan(options, temporaryReportPath)
+	args := replaceReportPath(plannedArgs, directory)
+	result, runErr := service.runner.Run(ctx, options.Root, name, args, output)
 	if ctx.Err() != nil {
 		return Report{}, commandError(ctx, runErr)
 	}
@@ -267,18 +269,12 @@ func (service *Service) runStrykerJS(ctx context.Context, options Options, outpu
 	if err != nil {
 		return Report{}, err
 	}
-	args := []string{"--no-install", "stryker", "run", "--reporters", "json"}
-	if options.Incremental {
-		args = append(args, "--incremental")
-	}
-	if len(options.Paths) > 0 {
-		args = append(args, "--mutate", strings.Join(options.Paths, ","))
-	}
+	name, args, _ := commandPlan(options, reportPath)
 	previous, err := reportState(reportPath)
 	if err != nil {
 		return Report{}, err
 	}
-	result, runErr := service.runner.Run(ctx, options.Root, npxCommand(), args, output)
+	result, runErr := service.runner.Run(ctx, options.Root, name, args, output)
 	if ctx.Err() != nil {
 		return Report{}, commandError(ctx, runErr)
 	}

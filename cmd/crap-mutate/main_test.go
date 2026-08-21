@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -15,6 +16,43 @@ func TestRunVersion(t *testing.T) {
 	}
 	if stdout.String() != version+"\n" {
 		t.Fatalf("version = %q", stdout.String())
+	}
+}
+
+func TestRunDryRunReturnsPlanWithoutExecutingEngine(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"--language", "go", "--dry-run", "--format", "json"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("code = %d, stderr = %s", code, stderr.String())
+	}
+	var plan mutation.Plan
+	if err := json.Unmarshal(stdout.Bytes(), &plan); err != nil {
+		t.Fatal(err)
+	}
+	if plan.Engine != "gremlins" || plan.Arguments[0] != "unleash" || plan.ReportPath != "$REPORT_PATH" {
+		t.Fatalf("plan = %#v", plan)
+	}
+}
+
+func TestWriteDoctorText(t *testing.T) {
+	var output bytes.Buffer
+	report := mutation.DoctorReport{Ready: true, Checks: []mutation.DoctorCheck{{Name: "engine-version", Status: "passed", Message: "v1"}}}
+	if err := writeDoctor(&output, report, "text"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(output.String(), "engine-version") || !strings.Contains(output.String(), "ready: true") {
+		t.Fatalf("output = %s", output.String())
+	}
+}
+
+func TestWritePlanTextPreservesArgumentBoundaries(t *testing.T) {
+	var output bytes.Buffer
+	plan := mutation.Plan{Executable: "tool", Arguments: []string{"--path", "source files/work.ts"}}
+	if err := writePlan(&output, plan, "text"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(output.String(), `"source files/work.ts"`) {
+		t.Fatalf("output = %s", output.String())
 	}
 }
 

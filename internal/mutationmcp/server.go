@@ -34,6 +34,16 @@ type GetResultsInput struct {
 	Cursor     string   `json:"cursor,omitempty" jsonschema:"Opaque continuation cursor. Do not combine with other fields."`
 }
 
+type InspectInput struct {
+	Root           string   `json:"root,omitempty" jsonschema:"Authorized project root. Defaults to the MCP server root."`
+	Language       string   `json:"language" jsonschema:"Required language: csharp, go, or typescript."`
+	Paths          []string `json:"paths,omitempty" jsonschema:"Production source paths or globs. Go accepts one package directory; C# and TypeScript require in-root patterns."`
+	MinimumScore   *float64 `json:"minimumScore,omitempty" jsonschema:"Minimum accepted mutation score from 0 through 100. Defaults to 80."`
+	TimeoutSeconds int      `json:"timeoutSeconds,omitempty" jsonschema:"Maximum diagnostic or engine runtime in seconds. Defaults to 1800."`
+	Incremental    bool     `json:"incremental,omitempty" jsonschema:"Enable StrykerJS incremental mode. TypeScript only."`
+	ReportPath     string   `json:"reportPath,omitempty" jsonschema:"In-root StrykerJS JSON report path."`
+}
+
 type MutationOutput struct {
 	PageSchemaVersion string                  `json:"pageSchemaVersion"`
 	ReportID          string                  `json:"reportId"`
@@ -65,15 +75,25 @@ type executor interface {
 	Run(context.Context, mutation.Options, io.Writer) (mutation.Report, error)
 }
 
+type inspector interface {
+	Plan(mutation.Options) (mutation.Plan, error)
+	Doctor(context.Context, mutation.Options) (mutation.DoctorReport, error)
+}
+
 func Run(ctx context.Context, version string, policy *rootauth.Policy) error {
 	return New(version, policy).Run(ctx, &mcp.StdioTransport{})
 }
 
 func New(version string, policy *rootauth.Policy) *mcp.Server {
-	return newServer(version, mutation.NewService(), policy, newSnapshotStore())
+	service := mutation.NewService()
+	return newServerWithInspector(version, service, service, policy, newSnapshotStore())
 }
 
 func newServer(version string, service executor, policy *rootauth.Policy, snapshots *snapshotStore) *mcp.Server {
+	return newServerWithInspector(version, service, mutation.NewService(), policy, snapshots)
+}
+
+func newServerWithInspector(version string, service executor, inspect inspector, policy *rootauth.Policy, snapshots *snapshotStore) *mcp.Server {
 	server := mcp.NewServer(&mcp.Implementation{Name: "crap-mutate", Version: version}, &mcp.ServerOptions{
 		Instructions: "Use run_mutation_tests when the user asks to run mutation testing for C#, Go, or TypeScript. The native engine must produce every score; never infer mutation scores yourself. Mutation runs execute project code with server privileges and are not sandboxed. Start with actionable results, then use get_mutation_results for later immutable pages.",
 	})
@@ -92,7 +112,49 @@ func newServer(version string, service executor, policy *rootauth.Policy, snapsh
 		output, err := getMutationResults(snapshots, input)
 		return nil, output, err
 	})
+	mcp.AddTool(server, &mcp.Tool{
+		Name: "plan_mutation_run", Title: "Plan mutation run",
+		Description: "Validate inputs and return the exact native command plan without executing mutation tests.",
+		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true, IdempotentHint: true, OpenWorldHint: boolPointer(false), DestructiveHint: boolPointer(false)},
+	}, func(_ context.Context, _ *mcp.CallToolRequest, input InspectInput) (*mcp.CallToolResult, mutation.Plan, error) {
+		options, err := inspectOptions(policy, input)
+		if err != nil {
+			return nil, mutation.Plan{}, err
+		}
+		plan, err := inspect.Plan(options)
+		return nil, plan, err
+	})
+	mcp.AddTool(server, &mcp.Tool{
+		Name: "check_mutation_setup", Title: "Check mutation setup",
+		Description: "Check the native engine version and project prerequisites without running mutation tests.",
+		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: false, IdempotentHint: false, OpenWorldHint: boolPointer(true), DestructiveHint: boolPointer(true)},
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, input InspectInput) (*mcp.CallToolResult, mutation.DoctorReport, error) {
+		options, err := inspectOptions(policy, input)
+		if err != nil {
+			return nil, mutation.DoctorReport{}, err
+		}
+		report, err := inspect.Doctor(ctx, options)
+		return nil, report, err
+	})
 	return server
+}
+
+func inspectOptions(policy *rootauth.Policy, input InspectInput) (mutation.Options, error) {
+	minimum := 80.0
+	if input.MinimumScore != nil {
+		minimum = *input.MinimumScore
+	}
+	if math.IsNaN(minimum) || math.IsInf(minimum, 0) || minimum < 0 || minimum > 100 {
+		return mutation.Options{}, fmt.Errorf("minimumScore must be between 0 and 100")
+	}
+	scope, err := policy.Root(input.Root)
+	if err != nil {
+		return mutation.Options{}, err
+	}
+	return mutation.Options{
+		Root: scope.Path(), Language: input.Language, Paths: input.Paths, MinimumScore: minimum,
+		TimeoutSeconds: input.TimeoutSeconds, Incremental: input.Incremental, ReportPath: input.ReportPath, Authorization: scope,
+	}, nil
 }
 
 func runMutation(ctx context.Context, service executor, policy *rootauth.Policy, snapshots *snapshotStore, input RunInput) (*mcp.CallToolResult, MutationOutput, error) {

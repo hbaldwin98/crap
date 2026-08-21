@@ -246,6 +246,7 @@ For Go, install a selected Gremlins release and put the `gremlins` executable on
 
 ```text
 crap-mutate --language csharp|go|typescript [options] [path ...]
+crap-mutate doctor --language csharp|go|typescript [options] [path ...]
 crap-mutate mcp
 ```
 
@@ -260,9 +261,14 @@ Options:
 | `--timeout DURATION` | `30m` | Stop the engine after a Go duration such as `10m` or `1h`. |
 | `--incremental` | `false` | Enable StrykerJS incremental mode. |
 | `--report-path PATH` | StrykerJS default | Read a custom StrykerJS JSON reporter path. |
+| `--dry-run` | `false` | Validate inputs and print the exact native command plan without executing it. |
 | `--version` | | Print the wrapper version. |
 
 Run from the directory where the native engine normally runs. Stryker.NET usually runs from the C# test project, Gremlins from the Go module root, and StrykerJS from the directory containing its configuration.
+
+Run `crap-mutate doctor --language NAME [path ...]` before a first mutation run or after changing engine versions. Doctor checks the executable, a language-specific project marker, and the native version command without running mutation tests. It states the native report contract enforced later when a run is parsed: Gremlins v0.6 JSON, Stryker.NET schema 2, or StrykerJS schema 1.0. The version probe alone does not prove report compatibility. A missing project marker or unverified compatibility is a warning; a missing or failing engine is an error. Add `--format json` for automation.
+
+`--dry-run` returns schema-versioned plan JSON or text. The argument list is the same one execution consumes. `$REPORT_PATH` marks a private temporary report created only during Gremlins and Stryker.NET execution; StrykerJS plans show the configured in-project report path.
 
 ```sh
 # C#: paths become repeated Stryker.NET --mutate options
@@ -340,6 +346,8 @@ Example MCP configuration:
 ```
 
 `run_mutation_tests` executes the engine once, retains an immutable normalized report for 30 minutes, and returns a compact first page plus `reportId`. The paging envelope has `pageSchemaVersion: "1"`; the nested `schemaVersion` remains the normalized mutation report contract. Actionable mode returns survived and uncovered mutants. Use the read-only `get_mutation_results` tool with `page.nextCursor` for continuation pages, or with `reportId` and a new mode/status filter to start another view. Snapshots are bounded and may be evicted; rerun the mutation tool when a report is expired or unavailable.
+
+The read-only `plan_mutation_run` tool validates the same authorized inputs and returns the native command plan without execution. `check_mutation_setup` additionally executes the native version probe and returns project, executable, version, and report-contract checks. Because a project-local version command can execute project code, clients must not treat this tool as read-only or auto-approve it. These tools accept the setup fields through `reportPath`; paging fields apply only to `run_mutation_tests` and `get_mutation_results`.
 
 MCP root checks prevent caller-supplied paths and report locations from escaping configured roots, including through existing symlinks. Authorized mutation globs reject brace expansion and wildcard scopes containing symlinks. These checks are not a process sandbox or a defense against concurrent filesystem replacement: mutation engines, build scripts, and project tests execute with the server process's filesystem and network privileges. Run `crap-mutate mcp` only for trusted projects and accounts.
 

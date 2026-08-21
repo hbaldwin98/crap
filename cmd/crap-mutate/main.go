@@ -25,6 +25,7 @@ type cliOptions struct {
 	minimumScore                 float64
 	timeout                      time.Duration
 	incremental, fail, version   bool
+	dryRun, doctor               bool
 }
 
 func main() { os.Exit(run(os.Args[1:], os.Stdout, os.Stderr)) }
@@ -32,6 +33,10 @@ func main() { os.Exit(run(os.Args[1:], os.Stdout, os.Stderr)) }
 func run(args []string, stdout, stderr io.Writer) int {
 	if len(args) > 0 && args[0] == "mcp" {
 		return runMCP(args[1:], stderr)
+	}
+	doctor := len(args) > 0 && args[0] == "doctor"
+	if doctor {
+		args = args[1:]
 	}
 	options, ok := parseOptions(args, stderr)
 	if !ok {
@@ -41,6 +46,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stdout, version)
 		return 0
 	}
+	options.doctor = doctor
 	return runMutation(options, stdout, stderr)
 }
 
@@ -96,11 +102,40 @@ func runMutation(options cliOptions, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "crap-mutate: determine working directory: %v\n", err)
 		return 1
 	}
-	report, err := mutation.NewService().Run(context.Background(), mutation.Options{
+	mutationOptions := mutation.Options{
 		Root: root, Language: options.language, Paths: options.paths,
 		MinimumScore: options.minimumScore, TimeoutSeconds: int(options.timeout.Seconds()),
 		Incremental: options.incremental, ReportPath: options.reportPath,
-	}, stderr)
+	}
+	service := mutation.NewService()
+	if options.doctor {
+		report, err := service.Doctor(context.Background(), mutationOptions)
+		if err != nil {
+			fmt.Fprintf(stderr, "crap-mutate: doctor: %v\n", err)
+			return 1
+		}
+		if err := writeDoctor(stdout, report, options.format); err != nil {
+			fmt.Fprintf(stderr, "crap-mutate: write doctor report: %v\n", err)
+			return 1
+		}
+		if !report.Ready {
+			return 1
+		}
+		return 0
+	}
+	if options.dryRun {
+		plan, err := service.Plan(mutationOptions)
+		if err != nil {
+			fmt.Fprintf(stderr, "crap-mutate: plan: %v\n", err)
+			return 1
+		}
+		if err := writePlan(stdout, plan, options.format); err != nil {
+			fmt.Fprintf(stderr, "crap-mutate: write plan: %v\n", err)
+			return 1
+		}
+		return 0
+	}
+	report, err := service.Run(context.Background(), mutationOptions, stderr)
 	if err != nil {
 		fmt.Fprintf(stderr, "crap-mutate: %v\n", err)
 		return 1
@@ -128,6 +163,7 @@ func parseOptions(args []string, stderr io.Writer) (cliOptions, bool) {
 	flags.Float64Var(&options.minimumScore, "minimum-score", 80, "minimum accepted mutation score")
 	flags.DurationVar(&options.timeout, "timeout", 30*time.Minute, "maximum mutation engine runtime")
 	flags.BoolVar(&options.incremental, "incremental", false, "enable StrykerJS incremental mode")
+	flags.BoolVar(&options.dryRun, "dry-run", false, "print the mutation command plan without running it")
 	flags.StringVar(&options.reportPath, "report-path", "", "custom StrykerJS JSON report path")
 	flags.BoolVar(&options.fail, "fail-on-threshold", false, "exit 2 when the mutation score is below the minimum")
 	flags.BoolVar(&options.version, "version", false, "print version")
@@ -160,16 +196,49 @@ func parseOptions(args []string, stderr io.Writer) (cliOptions, bool) {
 
 func writeUsage(writer io.Writer, flags *flag.FlagSet) {
 	fmt.Fprintln(writer, "Usage: crap-mutate --language csharp|go|typescript [options] [path ...]")
+	fmt.Fprintln(writer, "       crap-mutate doctor --language csharp|go|typescript [options] [path ...]")
 	fmt.Fprintln(writer, "       crap-mutate mcp")
 	fmt.Fprintln(writer, "Run a language-native mutation engine and normalize its report.")
 	flags.PrintDefaults()
 }
 
+func writePlan(writer io.Writer, plan mutation.Plan, format string) error {
+	if format == "json" {
+		return writeJSON(writer, plan)
+	}
+	fmt.Fprintf(writer, "root: %s\nengine: %s\ncommand: %s %s\nreport: %s\n",
+		plan.Root, plan.Engine, plan.Executable, quotedArguments(plan.Arguments), plan.ReportPath)
+	return nil
+}
+
+func quotedArguments(arguments []string) string {
+	quoted := make([]string, len(arguments))
+	for index, argument := range arguments {
+		quoted[index] = fmt.Sprintf("%q", argument)
+	}
+	return strings.Join(quoted, " ")
+}
+
+func writeDoctor(writer io.Writer, report mutation.DoctorReport, format string) error {
+	if format == "json" {
+		return writeJSON(writer, report)
+	}
+	for _, check := range report.Checks {
+		fmt.Fprintf(writer, "%-8s %-16s %s\n", check.Status, check.Name, check.Message)
+	}
+	fmt.Fprintf(writer, "\nready: %t\n", report.Ready)
+	return nil
+}
+
+func writeJSON(writer io.Writer, value any) error {
+	encoder := json.NewEncoder(writer)
+	encoder.SetIndent("", "  ")
+	return encoder.Encode(value)
+}
+
 func writeReport(writer io.Writer, report mutation.Report, format string) error {
 	if format == "json" {
-		encoder := json.NewEncoder(writer)
-		encoder.SetIndent("", "  ")
-		return encoder.Encode(report)
+		return writeJSON(writer, report)
 	}
 	writeText(writer, report)
 	return nil

@@ -15,6 +15,33 @@ type Options struct {
 	Authorization  *rootauth.Root
 }
 
+const PlanSchemaVersion = "1"
+
+type Plan struct {
+	SchemaVersion  string   `json:"schemaVersion"`
+	Root           string   `json:"root"`
+	Language       string   `json:"language"`
+	Engine         string   `json:"engine"`
+	Executable     string   `json:"executable"`
+	Arguments      []string `json:"arguments"`
+	ReportPath     string   `json:"reportPath"`
+	TimeoutSeconds int      `json:"timeoutSeconds"`
+	MinimumScore   float64  `json:"minimumScore"`
+}
+
+type DoctorReport struct {
+	SchemaVersion string        `json:"schemaVersion"`
+	Plan          Plan          `json:"plan"`
+	Ready         bool          `json:"ready"`
+	Checks        []DoctorCheck `json:"checks"`
+}
+
+type DoctorCheck struct {
+	Name    string `json:"name"`
+	Status  string `json:"status"`
+	Message string `json:"message"`
+}
+
 type Report struct {
 	SchemaVersion string         `json:"schemaVersion"`
 	Language      string         `json:"language"`
