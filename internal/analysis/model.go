@@ -8,6 +8,7 @@ type Options struct {
 	DiffBase      string
 	Root          string
 	CRAPThreshold float64
+	IncludeTests  bool
 }
 
 type Report struct {

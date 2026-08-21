@@ -15,6 +15,7 @@ type AnalyzeInput struct {
 	CoveragePath  string   `json:"coveragePath,omitempty" jsonschema:"Cobertura XML or Go coverprofile path, relative to root. Omit to score with unknown coverage treated as zero."`
 	DiffBase      string   `json:"diffBase,omitempty" jsonschema:"Git revision to compare against. When set, return only callables intersecting added or modified lines."`
 	CRAPThreshold *float64 `json:"crapThreshold,omitempty" jsonschema:"Score above which a callable is flagged. Defaults to 30."`
+	IncludeTests  bool     `json:"includeTests,omitempty" jsonschema:"Include Go _test.go files. Defaults to false."`
 }
 
 func Run(ctx context.Context, version string) error {
@@ -57,6 +58,7 @@ func analyze(_ context.Context, _ *mcp.CallToolRequest, input AnalyzeInput) (*mc
 		CoveragePath:  input.CoveragePath,
 		DiffBase:      input.DiffBase,
 		CRAPThreshold: threshold,
+		IncludeTests:  input.IncludeTests,
 	})
 	return nil, report, err
 }

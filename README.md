@@ -21,6 +21,8 @@ Analyze all C# and Go files below the current directory:
 ./crap --format json .
 ```
 
+Go `_test.go` files are excluded by default because Go coverprofiles do not instrument test function bodies. Pass `--include-tests` to analyze them explicitly.
+
 Analyze specific paths with coverage:
 
 ```sh
@@ -96,5 +98,6 @@ The server exposes `analyze_code` with these inputs:
 - `coveragePath`: optional Cobertura XML or Go coverprofile, relative to `root`.
 - `diffBase`: optional Git revision; when set, only changed callables are returned.
 - `crapThreshold`: optional threshold; defaults to `30`.
+- `includeTests`: include Go `_test.go` files; defaults to `false`.
 
 The tool's structured output is the same report returned by `crap --format json`. `schemaVersion` changes if that contract makes an incompatible change.

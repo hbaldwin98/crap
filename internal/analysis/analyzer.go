@@ -96,7 +96,7 @@ func (analyzer *Analyzer) Analyze(options Options) (Report, error) {
 	if err != nil {
 		return Report{}, fmt.Errorf("resolve root: %w", err)
 	}
-	files, err := findSourceFiles(root, options.Paths)
+	files, err := findSourceFiles(root, options.Paths, options.IncludeTests)
 	if err != nil {
 		return Report{}, err
 	}
@@ -322,54 +322,74 @@ func goQualifiedName(node *treesitter.Node, source []byte) string {
 	return strings.Join(parts, ".")
 }
 
-func findSourceFiles(root string, paths []string) ([]string, error) {
+type sourceCollector struct {
+	includeTests bool
+	seen         map[string]bool
+	files        []string
+}
+
+func findSourceFiles(root string, paths []string, includeTests bool) ([]string, error) {
 	if len(paths) == 0 {
 		paths = []string{"."}
 	}
-	seen := make(map[string]bool)
-	files := make([]string, 0)
+	collector := sourceCollector{includeTests: includeTests, seen: make(map[string]bool)}
 	for _, requested := range paths {
-		path := requested
-		if !filepath.IsAbs(path) {
-			path = filepath.Join(root, path)
-		}
-		info, err := os.Stat(path)
-		if err != nil {
-			return nil, fmt.Errorf("inspect %s: %w", requested, err)
-		}
-		if !info.IsDir() {
-			if isSourceFile(path) && !seen[path] {
-				seen[path] = true
-				files = append(files, path)
-			}
-			continue
-		}
-		err = filepath.WalkDir(path, func(candidate string, entry fs.DirEntry, walkErr error) error {
-			if walkErr != nil {
-				return walkErr
-			}
-			if entry.IsDir() && candidate != path {
-				name := entry.Name()
-				if name == ".git" || name == "bin" || name == "obj" || name == "node_modules" {
-					return filepath.SkipDir
-				}
-			}
-			if !entry.IsDir() && isSourceFile(candidate) && !seen[candidate] {
-				seen[candidate] = true
-				files = append(files, candidate)
-			}
-			return nil
-		})
-		if err != nil {
-			return nil, fmt.Errorf("walk %s: %w", requested, err)
+		if err := collector.add(root, requested); err != nil {
+			return nil, err
 		}
 	}
-	sort.Strings(files)
-	return files, nil
+	sort.Strings(collector.files)
+	return collector.files, nil
 }
 
-func isSourceFile(path string) bool {
+func (collector *sourceCollector) add(root, requested string) error {
+	path := requested
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(root, path)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return fmt.Errorf("inspect %s: %w", requested, err)
+	}
+	if info.IsDir() {
+		if err := filepath.WalkDir(path, collector.visit); err != nil {
+			return fmt.Errorf("walk %s: %w", requested, err)
+		}
+		return nil
+	}
+	collector.collect(path)
+	return nil
+}
+
+func (collector *sourceCollector) visit(path string, entry fs.DirEntry, walkErr error) error {
+	if walkErr != nil {
+		return walkErr
+	}
+	if entry.IsDir() && ignoredDirectory(entry.Name()) {
+		return filepath.SkipDir
+	}
+	if !entry.IsDir() {
+		collector.collect(path)
+	}
+	return nil
+}
+
+func (collector *sourceCollector) collect(path string) {
+	if isSourceFile(path, collector.includeTests) && !collector.seen[path] {
+		collector.seen[path] = true
+		collector.files = append(collector.files, path)
+	}
+}
+
+func ignoredDirectory(name string) bool {
+	return name == ".git" || name == "bin" || name == "obj" || name == "node_modules"
+}
+
+func isSourceFile(path string, includeTests bool) bool {
 	extension := strings.ToLower(filepath.Ext(path))
+	if extension == ".go" && !includeTests && strings.HasSuffix(strings.ToLower(path), "_test.go") {
+		return false
+	}
 	return extension == ".cs" || extension == ".go"
 }
 

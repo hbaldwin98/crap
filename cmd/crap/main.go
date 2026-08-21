@@ -16,48 +16,79 @@ import (
 
 const version = "0.1.0"
 
+type cliOptions struct {
+	paths           []string
+	format          string
+	coverage        string
+	diffBase        string
+	threshold       float64
+	failOnThreshold bool
+	includeTests    bool
+	showVersion     bool
+}
+
 func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
 }
 
 func run(args []string, stdout, stderr io.Writer) int {
 	if len(args) > 0 && args[0] == "mcp" {
-		if err := mcpserver.Run(context.Background(), version); err != nil {
-			fmt.Fprintf(stderr, "crap: MCP server: %v\n", err)
-			return 1
-		}
-		return 0
+		return runMCP(stderr)
 	}
-	flags := flag.NewFlagSet("crap", flag.ContinueOnError)
-	flags.SetOutput(stderr)
-	format := flags.String("format", "text", "output format: text or json")
-	coverage := flags.String("coverage", "", "Cobertura XML or Go coverprofile")
-	diffBase := flags.String("diff-base", "", "only callables touching lines changed from this Git revision")
-	threshold := flags.Float64("threshold", 30, "CRAP score threshold")
-	failOnThreshold := flags.Bool("fail-on-threshold", false, "exit 2 when a callable exceeds the threshold")
-	showVersion := flags.Bool("version", false, "print version")
-	flags.Usage = func() {
-		fmt.Fprintln(stderr, "Usage: crap [options] [path ...]")
-		fmt.Fprintln(stderr, "       crap mcp")
-		fmt.Fprintln(stderr, "Deterministically calculate cyclomatic complexity and CRAP scores for C# and Go callables.")
-		flags.PrintDefaults()
-	}
-	if err := flags.Parse(args); err != nil {
+	options, ok := parseOptions(args, stderr)
+	if !ok {
 		return 1
 	}
-	if *showVersion {
+	if options.showVersion {
 		fmt.Fprintln(stdout, version)
 		return 0
 	}
-	if *format != "text" && *format != "json" {
-		fmt.Fprintf(stderr, "crap: unsupported format %q\n", *format)
-		return 1
-	}
-	if *threshold < 0 {
-		fmt.Fprintln(stderr, "crap: threshold must not be negative")
-		return 1
-	}
+	return runAnalysis(options, stdout, stderr)
+}
 
+func runMCP(stderr io.Writer) int {
+	if err := mcpserver.Run(context.Background(), version); err != nil {
+		fmt.Fprintf(stderr, "crap: MCP server: %v\n", err)
+		return 1
+	}
+	return 0
+}
+
+func parseOptions(args []string, stderr io.Writer) (cliOptions, bool) {
+	flags := flag.NewFlagSet("crap", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	options := cliOptions{}
+	flags.StringVar(&options.format, "format", "text", "output format: text or json")
+	flags.StringVar(&options.coverage, "coverage", "", "Cobertura XML or Go coverprofile")
+	flags.StringVar(&options.diffBase, "diff-base", "", "only callables touching lines changed from this Git revision")
+	flags.Float64Var(&options.threshold, "threshold", 30, "CRAP score threshold")
+	flags.BoolVar(&options.failOnThreshold, "fail-on-threshold", false, "exit 2 when a callable exceeds the threshold")
+	flags.BoolVar(&options.includeTests, "include-tests", false, "include Go _test.go files")
+	flags.BoolVar(&options.showVersion, "version", false, "print version")
+	flags.Usage = func() { writeUsage(stderr, flags) }
+	if err := flags.Parse(args); err != nil {
+		return cliOptions{}, false
+	}
+	options.paths = flags.Args()
+	if options.format != "text" && options.format != "json" {
+		fmt.Fprintf(stderr, "crap: unsupported format %q\n", options.format)
+		return cliOptions{}, false
+	}
+	if options.threshold < 0 {
+		fmt.Fprintln(stderr, "crap: threshold must not be negative")
+		return cliOptions{}, false
+	}
+	return options, true
+}
+
+func writeUsage(writer io.Writer, flags *flag.FlagSet) {
+	fmt.Fprintln(writer, "Usage: crap [options] [path ...]")
+	fmt.Fprintln(writer, "       crap mcp")
+	fmt.Fprintln(writer, "Deterministically calculate cyclomatic complexity and CRAP scores for C# and Go callables.")
+	flags.PrintDefaults()
+}
+
+func runAnalysis(options cliOptions, stdout, stderr io.Writer) int {
 	root, err := os.Getwd()
 	if err != nil {
 		fmt.Fprintf(stderr, "crap: determine working directory: %v\n", err)
@@ -69,32 +100,32 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	defer analyzer.Close()
-
 	report, err := analyzer.Analyze(analysis.Options{
-		Paths:         flags.Args(),
-		CoveragePath:  *coverage,
-		DiffBase:      *diffBase,
-		Root:          root,
-		CRAPThreshold: *threshold,
+		Paths: options.paths, CoveragePath: options.coverage, DiffBase: options.diffBase,
+		Root: root, CRAPThreshold: options.threshold, IncludeTests: options.includeTests,
 	})
 	if err != nil {
 		fmt.Fprintf(stderr, "crap: %v\n", err)
 		return 1
 	}
-	if *format == "json" {
-		encoder := json.NewEncoder(stdout)
-		encoder.SetIndent("", "  ")
-		if err := encoder.Encode(report); err != nil {
-			fmt.Fprintf(stderr, "crap: write report: %v\n", err)
-			return 1
-		}
-	} else {
-		writeText(stdout, report)
+	if err := writeReport(stdout, report, options.format); err != nil {
+		fmt.Fprintf(stderr, "crap: write report: %v\n", err)
+		return 1
 	}
-	if *failOnThreshold && report.Summary.AboveThreshold > 0 {
+	if options.failOnThreshold && report.Summary.AboveThreshold > 0 {
 		return 2
 	}
 	return 0
+}
+
+func writeReport(writer io.Writer, report analysis.Report, format string) error {
+	if format == "json" {
+		encoder := json.NewEncoder(writer)
+		encoder.SetIndent("", "  ")
+		return encoder.Encode(report)
+	}
+	writeText(writer, report)
+	return nil
 }
 
 func writeText(writer io.Writer, report analysis.Report) {

@@ -19,40 +19,57 @@ func gitChangedLines(root, base string) (changedLines, error) {
 	if base == "" {
 		return nil, nil
 	}
-
-	command := exec.Command("git", "diff", "--unified=0", "--no-color", base, "--", "*.cs", "*.go")
-	command.Dir = root
-	output, err := command.Output()
+	output, err := gitOutput(root, "diff", "--unified=0", "--no-color", base, "--", "*.cs", "*.go")
 	if err != nil {
-		if exit, ok := err.(*exec.ExitError); ok {
-			return nil, fmt.Errorf("git diff %q failed: %s", base, strings.TrimSpace(string(exit.Stderr)))
-		}
-		return nil, fmt.Errorf("run git diff: %w", err)
+		return nil, fmt.Errorf("git diff %q: %w", base, err)
 	}
-
 	result := parseDiff(string(output))
-	untracked := exec.Command("git", "ls-files", "-z", "--others", "--exclude-standard", "--", "*.cs", "*.go")
-	untracked.Dir = root
-	untrackedOutput, err := untracked.Output()
+	untracked, err := gitOutput(root, "ls-files", "-z", "--others", "--exclude-standard", "--", "*.cs", "*.go")
 	if err != nil {
 		return nil, fmt.Errorf("list untracked source files: %w", err)
 	}
-	for _, path := range strings.Split(strings.TrimSuffix(string(untrackedOutput), "\x00"), "\x00") {
+	if err := addUntrackedFiles(result, root, untracked); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+func gitOutput(root string, args ...string) ([]byte, error) {
+	command := exec.Command("git", args...)
+	command.Dir = root
+	output, err := command.Output()
+	if exit, ok := err.(*exec.ExitError); ok {
+		return nil, fmt.Errorf("%s", strings.TrimSpace(string(exit.Stderr)))
+	}
+	if err != nil {
+		return nil, fmt.Errorf("run git: %w", err)
+	}
+	return output, nil
+}
+
+func addUntrackedFiles(result changedLines, root string, output []byte) error {
+	for _, path := range strings.Split(strings.TrimSuffix(string(output), "\x00"), "\x00") {
 		if path == "" {
 			continue
 		}
-		normalized := normalizePath(path)
-		data, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(path)))
-		if err != nil {
-			return nil, fmt.Errorf("read untracked file %s: %w", path, err)
-		}
-		result[normalized] = make(map[int]struct{})
-		lineCount := strings.Count(string(data), "\n") + 1
-		for line := 1; line <= lineCount; line++ {
-			result[normalized][line] = struct{}{}
+		if err := addUntrackedFile(result, root, path); err != nil {
+			return err
 		}
 	}
-	return result, nil
+	return nil
+}
+
+func addUntrackedFile(result changedLines, root, path string) error {
+	data, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(path)))
+	if err != nil {
+		return fmt.Errorf("read untracked file %s: %w", path, err)
+	}
+	lines := make(map[int]struct{})
+	for line := 1; line <= strings.Count(string(data), "\n")+1; line++ {
+		lines[line] = struct{}{}
+	}
+	result[normalizePath(path)] = lines
+	return nil
 }
 
 func parseDiff(diff string) changedLines {
