@@ -1,0 +1,10 @@
+{
+  "schemaVersion": "3", "reportType": "mutation", "tool": {"name": "crap-mutate", "version": "0.2.0", "modified": false},
+  "fingerprints": {"sources": [], "coverage": null, "nativeReport": {"sha256": "0000000000000000000000000000000000000000000000000000000000000000"}, "git": null, "configSha256": "1111111111111111111111111111111111111111111111111111111111111111"},
+  "coordinates": {"lineBase": 1, "columnBase": 1, "columnEncoding": "engine-native", "end": "exclusive"},
+  "language": "go", "engine": "gremlins", "engineIdentity": {"name": "gremlins", "reportContract": "gremlins-json", "reportContractVersion": "v0.6", "reportedVersion": null},
+  "score": 100, "scoreSource": "engine", "minimumScore": 80, "passed": true,
+  "summary": {"total": 1, "killed": 1, "survived": 0, "timedOut": 0, "noCoverage": 0, "compileError": 0, "runtimeError": 0, "ignored": 0, "other": 0},
+  "mutants": [{"id": "2222222222222222222222222222222222222222222222222222222222222222", "nativeId": null, "file": "work.go", "line": 2, "column": 3, "startLine": 2, "startColumn": 3, "endLine": null, "endColumn": null, "mutator": "CONDITIONALS_BOUNDARY", "status": "killed"}],
+  "provenance": {"nativeExitCode": 0, "nativeReportSchemaVersion": null, "nativeReportSha256": "0000000000000000000000000000000000000000000000000000000000000000", "nativeBreakThreshold": null}
+}

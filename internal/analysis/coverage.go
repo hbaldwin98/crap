@@ -10,6 +10,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/hbaldwin98/crap/internal/reportcontract"
 )
 
 type coverageSpan struct {
@@ -23,6 +25,8 @@ type coverageData struct {
 	files   map[string][]coverageSpan
 	aliases map[string][]string
 	loaded  bool
+	format  string
+	sha256  string
 }
 
 type coverageMatch struct {
@@ -54,9 +58,13 @@ func loadCoverage(path, root string) (coverageData, error) {
 		return coverageData{}, fmt.Errorf("read coverage: %w", err)
 	}
 	if bytes.HasPrefix(bytes.TrimSpace(data), []byte("mode:")) {
-		return parseGoCoverage(string(data))
+		result, err := parseGoCoverage(string(data))
+		result.sha256 = reportcontract.SHA256(data)
+		return result, err
 	}
-	return parseCobertura(data, root)
+	result, err := parseCobertura(data, root)
+	result.sha256 = reportcontract.SHA256(data)
+	return result, err
 }
 
 func parseCobertura(data []byte, root string) (coverageData, error) {
@@ -88,7 +96,7 @@ func parseCobertura(data []byte, root string) (coverageData, error) {
 			merged[filename][line.Number] = merged[filename][line.Number] || hits > 0
 		}
 	}
-	result := coverageData{files: make(map[string][]coverageSpan), aliases: aliases, loaded: true}
+	result := coverageData{files: make(map[string][]coverageSpan), aliases: aliases, loaded: true, format: "cobertura"}
 	for filename, lines := range merged {
 		for line, covered := range lines {
 			result.files[filename] = append(result.files[filename], coverageSpan{StartLine: line, EndLine: line, Statements: 1, Covered: covered})
@@ -102,14 +110,28 @@ func parseCobertura(data []byte, root string) (coverageData, error) {
 
 func coberturaIdentities(filename string, sources []string, root string) (string, []string) {
 	filename = normalizePortablePath(filename)
-	aliases := []string{filename}
 	root = strings.TrimSuffix(normalizePortablePath(root), "/")
 	if isPortableAbs(filename) {
 		if relative, ok := portableRelative(root, filename); ok {
-			return relative, []string{filename, relative}
+			return relative, []string{relative}
 		}
-		return filename, aliases
+		aliases := make([]string, 0, len(sources)+1)
+		for _, source := range sources {
+			source = strings.TrimSuffix(normalizePortablePath(source), "/")
+			if isPortableAbs(source) {
+				if relative, ok := portableRelative(source, filename); ok && safeCoverageIdentity(relative) {
+					aliases = append(aliases, relative)
+				}
+			}
+		}
+		if len(aliases) == 0 {
+			aliases = append(aliases, "_external/"+reportcontract.SHA256([]byte(filename))[:12]+"/"+path.Base(filename))
+		}
+		sort.Strings(aliases)
+		aliases = slicesCompact(aliases)
+		return aliases[0], aliases
 	}
+	aliases := []string{filename}
 	for _, source := range sources {
 		source = normalizePortablePath(source)
 		candidate := normalizePortablePath(source + "/" + filename)
@@ -123,6 +145,10 @@ func coberturaIdentities(filename string, sources []string, root string) (string
 	}
 	sort.Strings(aliases)
 	return filename, slicesCompact(aliases)
+}
+
+func safeCoverageIdentity(value string) bool {
+	return value != "" && value != "." && value != ".." && !isPortableAbs(value) && !strings.HasPrefix(value, "../") && !strings.Contains(value, "/../")
 }
 
 func portableRelative(root, candidate string) (string, bool) {
@@ -142,7 +168,7 @@ func isPortableAbs(value string) bool {
 }
 
 func parseGoCoverage(content string) (coverageData, error) {
-	result := coverageData{files: make(map[string][]coverageSpan), loaded: true}
+	result := coverageData{files: make(map[string][]coverageSpan), loaded: true, format: "go-coverprofile"}
 	lines := strings.Split(strings.TrimSpace(content), "\n")
 	for index, raw := range lines {
 		line := strings.TrimSpace(raw)

@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema", "$id": "mutation-report-v3.schema.json",
+  "type": "object",
+  "required": ["schemaVersion", "reportType", "tool", "fingerprints", "coordinates", "language", "engine", "engineIdentity", "score", "scoreSource", "minimumScore", "passed", "summary", "mutants", "provenance"],
+  "properties": {
+    "schemaVersion": { "const": "3" }, "reportType": { "const": "mutation" }, "tool": { "$ref": "common.schema.json#/$defs/tool" },
+    "fingerprints": { "$ref": "common.schema.json#/$defs/fingerprints" }, "coordinates": { "$ref": "common.schema.json#/$defs/coordinates" },
+    "language": { "enum": ["csharp", "go", "typescript"] }, "engine": { "enum": ["gremlins", "stryker-net", "stryker-js"] },
+    "engineIdentity": { "type": "object", "required": ["name", "reportContract", "reportContractVersion", "reportedVersion"], "properties": { "name": { "enum": ["gremlins", "stryker-net", "stryker-js"] }, "reportContract": { "enum": ["gremlins-json", "stryker-mutation-testing-report"] }, "reportContractVersion": { "enum": ["v0.6", "2", "1.0"] }, "reportedVersion": { "type": ["string", "null"] } }, "additionalProperties": false },
+    "score": { "type": ["number", "null"], "minimum": 0, "maximum": 100 }, "scoreSource": { "enum": ["engine", "report-statuses", "unavailable"] },
+    "minimumScore": { "type": "number", "minimum": 0, "maximum": 100 }, "passed": { "type": "boolean" },
+    "summary": { "$ref": "common.schema.json#/$defs/mutationSummary" }, "mutants": { "type": "array", "items": { "$ref": "common.schema.json#/$defs/mutant" } },
+    "provenance": { "type": "object", "required": ["nativeExitCode", "nativeReportSchemaVersion", "nativeReportSha256", "nativeBreakThreshold"], "properties": { "nativeExitCode": { "type": "integer" }, "nativeReportSchemaVersion": { "type": ["string", "null"] }, "nativeReportSha256": { "oneOf": [{ "type": "null" }, { "$ref": "common.schema.json#/$defs/digest" }] }, "nativeBreakThreshold": { "type": ["number", "null"], "minimum": 0, "maximum": 100 } }, "additionalProperties": false }
+  },
+  "additionalProperties": false
+}

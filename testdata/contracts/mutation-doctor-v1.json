@@ -1,0 +1,6 @@
+{
+  "schemaVersion": "1", "reportType": "mutation-doctor", "tool": {"name": "crap-mutate", "version": "0.2.0", "modified": false},
+  "fingerprints": {"sources": [], "coverage": null, "nativeReport": null, "git": null, "configSha256": "1111111111111111111111111111111111111111111111111111111111111111"},
+  "plan": {"schemaVersion": "2", "reportType": "mutation-plan", "tool": {"name": "crap-mutate", "version": "0.2.0", "modified": false}, "fingerprints": {"sources": [], "coverage": null, "nativeReport": null, "git": null, "configSha256": "1111111111111111111111111111111111111111111111111111111111111111"}, "coordinates": {"lineBase": 1, "columnBase": 1, "columnEncoding": "utf-8-bytes", "end": "exclusive"}, "root": "/project", "language": "go", "engine": "gremlins", "executable": "gremlins", "arguments": [], "reportPath": "$REPORT_PATH", "timeoutSeconds": 1800, "minimumScore": 80},
+  "ready": true, "checks": [{"name": "executable", "status": "passed", "message": "gremlins is available"}]
+}

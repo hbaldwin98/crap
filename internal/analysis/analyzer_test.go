@@ -120,6 +120,171 @@ func (s *Service) Run(ready bool) { if ready { return } }
 	}
 }
 
+func TestCallableIDIsStableWhenBlankLinesAreInsertedAbove(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "sample.go")
+	analyzer, err := NewAnalyzer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer analyzer.Close()
+	analyze := func(source string) MethodResult {
+		if err := os.WriteFile(path, []byte(source), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		report, err := analyzer.Analyze(Options{Root: root, Paths: []string{"sample.go"}, CRAPThreshold: 30})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return report.Methods[0]
+	}
+	first := analyze("package sample\nfunc Run(value int) int { return value }\n")
+	second := analyze("package sample\n\n\nfunc Run(value int) int { return value }\n")
+	formatted := analyze("package sample\nfunc /* stable */ Run( value int ) int { return value }\n")
+	if first.ID != second.ID || first.ID != formatted.ID {
+		t.Fatalf("ID changed after declaration formatting: %s, %s, %s", first.ID, second.ID, formatted.ID)
+	}
+	if first.StartLine == second.StartLine || first.Signature != "func Run(value int) int" {
+		t.Fatalf("unexpected AST metadata: first=%#v second=%#v", first, second)
+	}
+}
+
+func TestSameSignatureOccurrenceIDsAreDistinctAndStable(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "sample.ts")
+	analyzer, err := NewAnalyzer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer analyzer.Close()
+	analyze := func(prefix string) []MethodResult {
+		source := prefix + "const first = () => 1;\nconst second = () => 2;\n"
+		if err := os.WriteFile(path, []byte(source), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		report, err := analyzer.Analyze(Options{Root: root, Paths: []string{"sample.ts"}, CRAPThreshold: 30})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return report.Methods
+	}
+	first, second := analyze(""), analyze("\n\n")
+	if first[0].Signature != first[1].Signature || first[0].ID == first[1].ID {
+		t.Fatalf("same signatures did not receive distinct occurrence IDs: %#v", first)
+	}
+	if first[0].ID != second[0].ID || first[1].ID != second[1].ID {
+		t.Fatalf("occurrence IDs changed after blank lines: %#v != %#v", first, second)
+	}
+}
+
+func TestAssignedCallableIDsDoNotShiftWhenAnotherCallableIsInserted(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "sample.ts")
+	analyzer, err := NewAnalyzer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer analyzer.Close()
+	analyze := func(source string) map[string]string {
+		if err := os.WriteFile(path, []byte(source), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		report, err := analyzer.Analyze(Options{Root: root, Paths: []string{"sample.ts"}, CRAPThreshold: 30})
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids := make(map[string]string, len(report.Methods))
+		for _, method := range report.Methods {
+			ids[method.Name] = method.ID
+		}
+		return ids
+	}
+	before := analyze("const first = () => 1;\nconst second = () => 2;\n")
+	after := analyze("const added = () => 3;\nconst first = () => 1;\nconst second = () => 2;\n")
+	if before["first"] != after["first"] || before["second"] != after["second"] {
+		t.Fatalf("assigned callable IDs shifted: before=%v after=%v", before, after)
+	}
+}
+
+func TestAnonymousCallableIDUsesLexicalOwnerNotBody(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "sample.ts")
+	analyzer, err := NewAnalyzer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer analyzer.Close()
+	analyze := func(source string) MethodResult {
+		if err := os.WriteFile(path, []byte(source), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		report, err := analyzer.Analyze(Options{Root: root, Paths: []string{"sample.ts"}, CRAPThreshold: 30})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return report.Methods[0]
+	}
+	before := analyze("const result = [1].map(value => value + 1);\n")
+	after := analyze("const result = [1].map(value => value + 2);\n")
+	if before.ID != after.ID {
+		t.Fatalf("anonymous callable ID changed with body: %s != %s", before.ID, after.ID)
+	}
+}
+
+func TestSameNamedCallbacksInDifferentScopesHaveIndependentIDs(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "sample.ts")
+	analyzer, err := NewAnalyzer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer analyzer.Close()
+	analyze := func(source string) []string {
+		if err := os.WriteFile(path, []byte(source), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		report, err := analyzer.Analyze(Options{Root: root, Paths: []string{"sample.ts"}, CRAPThreshold: 30})
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids := make([]string, 0)
+		for _, method := range report.Methods {
+			if method.Kind == "arrow_function" {
+				ids = append(ids, method.ID)
+			}
+		}
+		return ids
+	}
+	before := analyze("const first = { run: () => 1 };\nconst second = { run: () => 2 };\n")
+	after := analyze("const added = { run: () => 3 };\nconst first = { run: () => 1 };\nconst second = { run: () => 2 };\n")
+	if len(before) != 2 || len(after) != 3 || before[0] != after[1] || before[1] != after[2] {
+		t.Fatalf("same-named callback IDs shifted: before=%v after=%v", before, after)
+	}
+}
+
+func TestDefaultAndExplicitRootPathHaveSameConfigFingerprint(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "sample.go"), []byte("package sample\nfunc Run() {}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	analyzer, err := NewAnalyzer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer analyzer.Close()
+	implicit, err := analyzer.Analyze(Options{Root: root, CRAPThreshold: 30})
+	if err != nil {
+		t.Fatal(err)
+	}
+	explicit, err := analyzer.Analyze(Options{Root: root, Paths: []string{"."}, CRAPThreshold: 30})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if implicit.Fingerprints.ConfigSHA256 != explicit.Fingerprints.ConfigSHA256 {
+		t.Fatalf("default path fingerprint differs: %s != %s", implicit.Fingerprints.ConfigSHA256, explicit.Fingerprints.ConfigSHA256)
+	}
+}
+
 func TestAnalyzerCountsTypeScriptCallablesAndBranches(t *testing.T) {
 	root := t.TempDir()
 	source := `namespace Demo {

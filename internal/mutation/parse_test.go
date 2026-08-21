@@ -2,7 +2,12 @@ package mutation
 
 import (
 	"encoding/json"
+	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
+
+	"github.com/santhosh-tekuri/jsonschema/v6"
 )
 
 func TestParseStrykerNormalizesAndScoresMutants(t *testing.T) {
@@ -31,11 +36,28 @@ func TestParseStrykerNormalizesAndScoresMutants(t *testing.T) {
 	if report.Summary.Total != 5 || report.Summary.Killed != 1 || report.Summary.TimedOut != 1 || report.Summary.CompileError != 1 {
 		t.Fatalf("unexpected summary: %#v", report.Summary)
 	}
-	if report.Mutants[0].File != "src/a.ts" || report.Mutants[0].ID != "3" || report.Mutants[0].Status != "survived" {
+	if report.Mutants[0].File != "src/a.ts" || report.Mutants[0].NativeID == nil || *report.Mutants[0].NativeID != "3" || report.Mutants[0].Status != "survived" {
 		t.Fatalf("mutants are not deterministically sorted: %#v", report.Mutants)
 	}
-	if report.SchemaVersion != "2" || report.Provenance.NativeReportSchemaVersion == nil || *report.Provenance.NativeReportSchemaVersion != "1.0" || report.Provenance.NativeReportSHA256 == nil || len(*report.Provenance.NativeReportSHA256) != 64 {
+	if report.SchemaVersion != "3" || report.Provenance.NativeReportSchemaVersion == nil || *report.Provenance.NativeReportSchemaVersion != "1.0" || report.Provenance.NativeReportSHA256 == nil || len(*report.Provenance.NativeReportSHA256) != 64 {
 		t.Fatalf("unexpected provenance: %#v", report.Provenance)
+	}
+}
+
+func TestStrykerWrapperIDIgnoresNativeIDAndStatus(t *testing.T) {
+	reportJSON := func(id, status string) []byte {
+		return []byte(`{"schemaVersion":"1.0","thresholds":{"high":80,"low":60,"break":null},"files":{"work.ts":{"language":"typescript","source":"x","mutants":[{"id":"` + id + `","mutatorName":"BooleanLiteral","replacement":"false","status":"` + status + `","location":{"start":{"line":1,"column":1},"end":{"line":1,"column":2}}}]}}}`)
+	}
+	first, err := parseStryker(reportJSON("1", "Killed"), "typescript", "stryker-js", 80)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := parseStryker(reportJSON("99", "Survived"), "typescript", "stryker-js", 80)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Mutants[0].ID != second.Mutants[0].ID {
+		t.Fatalf("wrapper ID changed: %s != %s", first.Mutants[0].ID, second.Mutants[0].ID)
 	}
 }
 
@@ -47,6 +69,9 @@ func TestParseGremlinsAllowsOnlyUncoveredMutants(t *testing.T) {
 	}
 	if report.Score == nil || *report.Score != 0 || report.Summary.NoCoverage != 1 || report.Provenance.NativeReportSHA256 == nil {
 		t.Fatalf("unexpected report: %#v", report)
+	}
+	if report.Mutants[0].EndLine != nil || report.Mutants[0].EndColumn != nil {
+		t.Fatalf("Gremlins point location gained a synthetic end: %#v", report.Mutants[0])
 	}
 }
 
@@ -78,6 +103,33 @@ func TestParseGremlinsUsesEngineScore(t *testing.T) {
 	if _, err := json.Marshal(report); err != nil {
 		t.Fatal(err)
 	}
+	validateMutationContract(t, report)
+}
+
+func validateMutationContract(t *testing.T, report Report) {
+	t.Helper()
+	_, file, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("locate mutation test")
+	}
+	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", ".."))
+	schemaPath := filepath.Join(root, "schemas", "v1", "mutation-report-v3.schema.json")
+	compiler := jsonschema.NewCompiler()
+	data, err := json.Marshal(report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var value any
+	if err := json.Unmarshal(data, &value); err != nil {
+		t.Fatal(err)
+	}
+	schema, err := compiler.Compile(schemaPath)
+	if err != nil {
+		t.Fatalf("compile %s: %v", schemaPath, err)
+	}
+	if err := schema.Validate(value); err != nil {
+		t.Fatalf("validate generated mutation report: %v", err)
+	}
 }
 
 func TestParseStrykerRejectsInvalidReport(t *testing.T) {
@@ -105,6 +157,7 @@ func TestParseStrykerRejectsInvalidMutants(t *testing.T) {
 		"non-schema status spelling": `{"schemaVersion":"1.0","thresholds":{"high":80,"low":60,"break":null},"files":{"work.ts":{"language":"typescript","source":"x","mutants":[{"id":"1","mutatorName":"x","status":"killed","location":{"start":{"line":1,"column":1},"end":{"line":1,"column":2}}}]}}}`,
 		"missing location":           `{"schemaVersion":"1.0","thresholds":{"high":80,"low":60,"break":null},"files":{"work.ts":{"language":"typescript","source":"x","mutants":[{"id":"1","mutatorName":"x","status":"Killed"}]}}}`,
 		"missing end location":       `{"schemaVersion":"1.0","thresholds":{"high":80,"low":60,"break":null},"files":{"work.ts":{"language":"typescript","source":"x","mutants":[{"id":"1","mutatorName":"x","status":"Killed","location":{"start":{"line":1,"column":1}}}]}}}`,
+		"zero multiline end column":  `{"schemaVersion":"1.0","thresholds":{"high":80,"low":60,"break":null},"files":{"work.ts":{"language":"typescript","source":"x","mutants":[{"id":"1","mutatorName":"x","status":"Killed","location":{"start":{"line":1,"column":1},"end":{"line":2,"column":0}}}]}}}`,
 	}
 	for name, data := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -112,6 +165,29 @@ func TestParseStrykerRejectsInvalidMutants(t *testing.T) {
 				t.Fatal("expected report validation error")
 			}
 		})
+	}
+}
+
+func TestMutationReportsRejectUnsafeAndAliasedPaths(t *testing.T) {
+	for name, data := range map[string]string{
+		"absolute Stryker path": `{"schemaVersion":"1.0","thresholds":{"high":80,"low":60,"break":null},"files":{"/tmp/work.ts":{"language":"typescript","source":"x","mutants":[]}}}`,
+		"parent Gremlins path":  `{"test_efficacy":0,"mutants_total":0,"mutants_killed":0,"mutants_lived":0,"mutants_not_viable":0,"mutants_not_covered":0,"files":[{"file_name":"../work.go","mutations":[]}]}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			if strings.Contains(name, "Stryker") {
+				if _, err := parseStryker([]byte(data), "typescript", "stryker-js", 80); err == nil {
+					t.Fatal("expected unsafe path error")
+				}
+				return
+			}
+			if _, err := parseGremlins([]byte(data), 80); err == nil {
+				t.Fatal("expected unsafe path error")
+			}
+		})
+	}
+	aliased := []byte(`{"schemaVersion":"1.0","thresholds":{"high":80,"low":60,"break":null},"files":{"src/work.ts":{"language":"typescript","source":"a","mutants":[]},"./src/work.ts":{"language":"typescript","source":"b","mutants":[]}}}`)
+	if _, err := parseStryker(aliased, "typescript", "stryker-js", 80); err == nil {
+		t.Fatal("expected duplicate normalized path error")
 	}
 }
 

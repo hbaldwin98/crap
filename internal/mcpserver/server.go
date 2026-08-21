@@ -7,6 +7,7 @@ import (
 	"sort"
 
 	"github.com/hbaldwin98/crap/internal/analysis"
+	"github.com/hbaldwin98/crap/internal/reportcontract"
 	"github.com/hbaldwin98/crap/internal/rootauth"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -25,18 +26,24 @@ type AnalyzeInput struct {
 }
 
 type AnalyzeOutput struct {
-	SchemaVersion  string                  `json:"schemaVersion"`
-	Mode           string                  `json:"mode"`
-	Coverage       string                  `json:"coverage,omitempty"`
-	DiffBase       string                  `json:"diffBase,omitempty"`
-	DiffBaseCommit string                  `json:"diffBaseCommit,omitempty"`
-	DiffHeadCommit string                  `json:"diffHeadCommit,omitempty"`
-	DiffMergeBase  string                  `json:"diffMergeBase,omitempty"`
-	Threshold      float64                 `json:"threshold"`
-	Summary        analysis.Summary        `json:"summary"`
-	Page           Page                    `json:"page"`
-	Methods        []analysis.MethodResult `json:"methods"`
-	Diagnostics    []analysis.Diagnostic   `json:"diagnostics,omitempty"`
+	PageSchemaVersion string                      `json:"pageSchemaVersion"`
+	ReportType        string                      `json:"reportType"`
+	SchemaVersion     string                      `json:"schemaVersion"`
+	Tool              reportcontract.ToolIdentity `json:"tool"`
+	Fingerprints      reportcontract.Fingerprints `json:"fingerprints"`
+	Coordinates       reportcontract.Coordinates  `json:"coordinates"`
+	Grammars          []analysis.GrammarIdentity  `json:"grammars"`
+	Mode              string                      `json:"mode"`
+	Coverage          analysis.CoverageMetadata   `json:"coverage"`
+	DiffBase          string                      `json:"diffBase,omitempty"`
+	DiffBaseCommit    string                      `json:"diffBaseCommit,omitempty"`
+	DiffHeadCommit    string                      `json:"diffHeadCommit,omitempty"`
+	DiffMergeBase     string                      `json:"diffMergeBase,omitempty"`
+	Threshold         float64                     `json:"threshold"`
+	Summary           analysis.Summary            `json:"summary"`
+	Page              Page                        `json:"page"`
+	Methods           []analysis.MethodResult     `json:"methods"`
+	Diagnostics       []analysis.Diagnostic       `json:"diagnostics"`
 }
 
 type Page struct {
@@ -151,6 +158,9 @@ func resultLimit(value *int) (int, error) {
 }
 
 func compactReport(report analysis.Report, mode string, limit, offset int) AnalyzeOutput {
+	if report.Fingerprints.Sources == nil {
+		report.Fingerprints.Sources = []reportcontract.FileFingerprint{}
+	}
 	methods := make([]analysis.MethodResult, 0, len(report.Methods))
 	for _, method := range report.Methods {
 		if mode == "summary" {
@@ -179,10 +189,12 @@ func compactReport(report analysis.Report, mode string, limit, offset int) Analy
 		page.NextOffset = &next
 	}
 	return AnalyzeOutput{
-		SchemaVersion: report.SchemaVersion, Mode: report.Mode, Coverage: report.Coverage,
+		PageSchemaVersion: "1", ReportType: "analysis-page", SchemaVersion: report.SchemaVersion,
+		Tool: report.Tool, Fingerprints: report.Fingerprints, Coordinates: report.Coordinates, Grammars: append(make([]analysis.GrammarIdentity, 0, len(report.Grammars)), report.Grammars...),
+		Mode: report.Mode, Coverage: report.Coverage,
 		DiffBase: report.DiffBase, DiffBaseCommit: report.DiffBaseCommit,
 		DiffHeadCommit: report.DiffHeadCommit, DiffMergeBase: report.DiffMergeBase,
 		Threshold: report.Threshold, Summary: report.Summary,
-		Page: page, Methods: pageMethods, Diagnostics: append([]analysis.Diagnostic(nil), report.Diagnostics...),
+		Page: page, Methods: pageMethods, Diagnostics: append(make([]analysis.Diagnostic, 0, len(report.Diagnostics)), report.Diagnostics...),
 	}
 }

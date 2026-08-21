@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/hbaldwin98/crap/internal/mutation"
+	"github.com/hbaldwin98/crap/internal/reportcontract"
 	"github.com/hbaldwin98/crap/internal/rootauth"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -45,20 +46,25 @@ type InspectInput struct {
 }
 
 type MutationOutput struct {
-	PageSchemaVersion string                  `json:"pageSchemaVersion"`
-	ReportID          string                  `json:"reportId"`
-	ExpiresAt         string                  `json:"expiresAt"`
-	SchemaVersion     string                  `json:"schemaVersion"`
-	Language          string                  `json:"language"`
-	Engine            string                  `json:"engine"`
-	Score             *float64                `json:"score"`
-	ScoreSource       string                  `json:"scoreSource"`
-	MinimumScore      float64                 `json:"minimumScore"`
-	Passed            bool                    `json:"passed"`
-	Summary           mutation.Summary        `json:"summary"`
-	Provenance        mutation.Provenance     `json:"provenance"`
-	Page              MutationPage            `json:"page"`
-	Mutants           []mutation.MutantResult `json:"mutants"`
+	PageSchemaVersion string                      `json:"pageSchemaVersion"`
+	ReportType        string                      `json:"reportType"`
+	ReportID          string                      `json:"reportId"`
+	ExpiresAt         string                      `json:"expiresAt"`
+	SchemaVersion     string                      `json:"schemaVersion"`
+	Tool              reportcontract.ToolIdentity `json:"tool"`
+	Fingerprints      reportcontract.Fingerprints `json:"fingerprints"`
+	Coordinates       reportcontract.Coordinates  `json:"coordinates"`
+	Language          string                      `json:"language"`
+	Engine            string                      `json:"engine"`
+	EngineIdentity    mutation.EngineIdentity     `json:"engineIdentity"`
+	Score             *float64                    `json:"score"`
+	ScoreSource       string                      `json:"scoreSource"`
+	MinimumScore      float64                     `json:"minimumScore"`
+	Passed            bool                        `json:"passed"`
+	Summary           mutation.Summary            `json:"summary"`
+	Provenance        mutation.Provenance         `json:"provenance"`
+	Page              MutationPage                `json:"page"`
+	Mutants           []mutation.MutantResult     `json:"mutants"`
 }
 
 type MutationPage struct {
@@ -271,6 +277,9 @@ func getMutationResults(snapshots *snapshotStore, input GetResultsInput) (Mutati
 }
 
 func pageReport(snapshots *snapshotStore, report mutation.Report, item *snapshot, query resultQuery, offset int) MutationOutput {
+	if report.Fingerprints.Sources == nil {
+		report.Fingerprints.Sources = []reportcontract.FileFingerprint{}
+	}
 	statusSet := make(map[string]bool, len(query.statuses))
 	for _, status := range query.statuses {
 		statusSet[status] = true
@@ -298,8 +307,9 @@ func pageReport(snapshots *snapshotStore, report mutation.Report, item *snapshot
 		page.NextCursor = snapshots.encodeCursor(cursorState{Version: 1, ReportID: item.id, Offset: nextOffset, ResultMode: query.mode, Statuses: query.statuses, Limit: query.limit})
 	}
 	return MutationOutput{
-		PageSchemaVersion: "1", ReportID: item.id, ExpiresAt: item.expiresAt.UTC().Format(time.RFC3339), SchemaVersion: report.SchemaVersion,
-		Language: report.Language, Engine: report.Engine, Score: report.Score, ScoreSource: report.ScoreSource,
+		PageSchemaVersion: "2", ReportType: "mutation-page", ReportID: item.id, ExpiresAt: item.expiresAt.UTC().Format(time.RFC3339), SchemaVersion: report.SchemaVersion,
+		Tool: report.Tool, Fingerprints: report.Fingerprints, Coordinates: report.Coordinates,
+		Language: report.Language, Engine: report.Engine, EngineIdentity: report.EngineIdentity, Score: report.Score, ScoreSource: report.ScoreSource,
 		MinimumScore: report.MinimumScore, Passed: report.Passed, Summary: report.Summary, Provenance: report.Provenance,
 		Page: page, Mutants: mutants,
 	}

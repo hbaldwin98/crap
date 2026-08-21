@@ -1,8 +1,11 @@
 package analysis
 
-import "github.com/hbaldwin98/crap/internal/rootauth"
+import (
+	"github.com/hbaldwin98/crap/internal/reportcontract"
+	"github.com/hbaldwin98/crap/internal/rootauth"
+)
 
-const SchemaVersion = "3"
+const SchemaVersion = "4"
 
 type Options struct {
 	Paths          []string
@@ -16,17 +19,33 @@ type Options struct {
 }
 
 type Report struct {
-	SchemaVersion  string         `json:"schemaVersion"`
-	Mode           string         `json:"mode"`
-	Coverage       string         `json:"coverage,omitempty"`
-	DiffBase       string         `json:"diffBase,omitempty"`
-	DiffBaseCommit string         `json:"diffBaseCommit,omitempty"`
-	DiffHeadCommit string         `json:"diffHeadCommit,omitempty"`
-	DiffMergeBase  string         `json:"diffMergeBase,omitempty"`
-	Threshold      float64        `json:"threshold"`
-	Summary        Summary        `json:"summary"`
-	Methods        []MethodResult `json:"methods"`
-	Diagnostics    []Diagnostic   `json:"diagnostics,omitempty"`
+	SchemaVersion  string                      `json:"schemaVersion"`
+	ReportType     string                      `json:"reportType"`
+	Tool           reportcontract.ToolIdentity `json:"tool"`
+	Fingerprints   reportcontract.Fingerprints `json:"fingerprints"`
+	Coordinates    reportcontract.Coordinates  `json:"coordinates"`
+	Grammars       []GrammarIdentity           `json:"grammars"`
+	Mode           string                      `json:"mode"`
+	Coverage       CoverageMetadata            `json:"coverage"`
+	DiffBase       string                      `json:"diffBase,omitempty"`
+	DiffBaseCommit string                      `json:"diffBaseCommit,omitempty"`
+	DiffHeadCommit string                      `json:"diffHeadCommit,omitempty"`
+	DiffMergeBase  string                      `json:"diffMergeBase,omitempty"`
+	Threshold      float64                     `json:"threshold"`
+	Summary        Summary                     `json:"summary"`
+	Methods        []MethodResult              `json:"methods"`
+	Diagnostics    []Diagnostic                `json:"diagnostics"`
+}
+
+type CoverageMetadata struct {
+	Format        string `json:"format"`
+	DisplayedPath string `json:"displayedPath,omitempty"`
+	SHA256        string `json:"sha256,omitempty"`
+}
+
+type GrammarIdentity struct {
+	Language string `json:"language"`
+	Version  string `json:"version"`
 }
 
 type Diagnostic struct {
@@ -53,8 +72,11 @@ type MethodResult struct {
 	File            string   `json:"file"`
 	Name            string   `json:"name"`
 	Kind            string   `json:"kind"`
+	Signature       string   `json:"signature"`
 	StartLine       int      `json:"startLine"`
+	StartColumn     int      `json:"startColumn"`
 	EndLine         int      `json:"endLine"`
+	EndColumn       int      `json:"endColumn"`
 	Complexity      int      `json:"complexity"`
 	CoveragePercent *float64 `json:"coveragePercent"`
 	CRAP            float64  `json:"crap"`

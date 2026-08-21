@@ -6,8 +6,11 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 
+	"github.com/hbaldwin98/crap/internal/buildinfo"
+	"github.com/hbaldwin98/crap/internal/reportcontract"
 	"github.com/hbaldwin98/crap/internal/rootauth"
 	treesitter "github.com/tree-sitter/go-tree-sitter"
 	tree_sitter_c_sharp "github.com/tree-sitter/tree-sitter-c-sharp/bindings/go"
@@ -144,6 +147,11 @@ func (analyzer *Analyzer) Analyze(options Options) (Report, error) {
 	}
 	if options.Authorization != nil {
 		root = options.Authorization.Path()
+	} else {
+		root, err = filepath.EvalSymlinks(root)
+		if err != nil {
+			return Report{}, fmt.Errorf("resolve root links: %w", err)
+		}
 	}
 	files, err := findSourceFiles(root, options.Paths, options.IncludeTests, options.Authorization)
 	if err != nil {
@@ -170,30 +178,80 @@ func (analyzer *Analyzer) Analyze(options Options) (Report, error) {
 
 	report := Report{
 		SchemaVersion:  SchemaVersion,
+		ReportType:     "analysis",
+		Tool:           buildinfo.Tool("crap"),
+		Coordinates:    reportcontract.DefaultCoordinates(),
 		Mode:           "all",
-		Coverage:       options.CoveragePath,
+		Coverage:       CoverageMetadata{Format: "none"},
 		DiffBase:       options.DiffBase,
 		DiffBaseCommit: changes.BaseCommit,
 		DiffHeadCommit: changes.HeadCommit,
 		DiffMergeBase:  changes.MergeBase,
 		Threshold:      options.CRAPThreshold,
 		Methods:        make([]MethodResult, 0),
+		Diagnostics:    make([]Diagnostic, 0),
+		Grammars:       make([]GrammarIdentity, 0),
+	}
+	if coverage.loaded {
+		report.Coverage = CoverageMetadata{Format: coverage.format, DisplayedPath: normalizeDisplayedPath(options.CoveragePath), SHA256: coverage.sha256}
 	}
 	if options.DiffBase != "" {
 		report.Mode = "changed"
 	}
 	relativeFiles := make([]string, len(files))
+	fileContents := make([][]byte, len(files))
+	report.Fingerprints.Sources = make([]reportcontract.FileFingerprint, 0, len(files))
+	usedGrammars := make(map[string]bool)
 	for index, file := range files {
 		relative, err := filepath.Rel(root, file)
 		if err != nil {
 			return Report{}, fmt.Errorf("make path relative: %w", err)
 		}
 		relativeFiles[index] = normalizePath(relative)
+		data, err := os.ReadFile(file)
+		if err != nil {
+			return Report{}, fmt.Errorf("fingerprint %s: %w", file, err)
+		}
+		fileContents[index] = data
+		report.Fingerprints.Sources = append(report.Fingerprints.Sources, reportcontract.FileFingerprint{Path: relativeFiles[index], SHA256: reportcontract.SHA256(data)})
+		usedGrammars[strings.ToLower(filepath.Ext(file))] = true
 	}
+	reportcontract.SortFiles(report.Fingerprints.Sources)
+	if coverage.loaded {
+		report.Fingerprints.Coverage = &reportcontract.FileFingerprint{Path: normalizeDisplayedPath(options.CoveragePath), SHA256: coverage.sha256}
+	}
+	if changes.BaseCommit != "" || changes.HeadCommit != "" || changes.MergeBase != "" {
+		report.Fingerprints.Git = &reportcontract.GitFingerprint{BaseCommit: changes.BaseCommit, HeadCommit: changes.HeadCommit, MergeBase: changes.MergeBase}
+	}
+	configPaths := append(make([]string, 0, len(options.Paths)), options.Paths...)
+	if len(configPaths) == 0 {
+		configPaths = []string{"."}
+	}
+	for index := range configPaths {
+		configPaths[index] = semanticPath(root, configPaths[index])
+	}
+	sort.Strings(configPaths)
+	report.Fingerprints.ConfigSHA256 = reportcontract.JSONFingerprint(struct {
+		Paths          []string `json:"paths"`
+		DiffBase       string   `json:"diffBase"`
+		Threshold      float64  `json:"threshold"`
+		IncludeTests   bool     `json:"includeTests"`
+		StrictCoverage bool     `json:"strictCoverage"`
+	}{configPaths, options.DiffBase, options.CRAPThreshold, options.IncludeTests, options.StrictCoverage})
+	grammarVersions := map[string]GrammarIdentity{
+		".cs":  {Language: "csharp", Version: "v0.23.5"},
+		".go":  {Language: "go", Version: "v0.23.4"},
+		".ts":  {Language: "typescript", Version: "v0.23.2"},
+		".tsx": {Language: "tsx", Version: "v0.23.2"},
+	}
+	for extension := range usedGrammars {
+		report.Grammars = append(report.Grammars, grammarVersions[extension])
+	}
+	sort.Slice(report.Grammars, func(i, j int) bool { return report.Grammars[i].Language < report.Grammars[j].Language })
 	coverageMatches := coverage.matchFiles(relativeFiles)
 
 	for index, file := range files {
-		methods, diagnostic, err := analyzer.analyzeFile(file, relativeFiles[index], coverageMatches[index], changes, options)
+		methods, diagnostic, err := analyzer.analyzeFile(file, relativeFiles[index], fileContents[index], coverageMatches[index], changes, options)
 		if err != nil {
 			return Report{}, err
 		}
@@ -222,11 +280,7 @@ func (analyzer *Analyzer) Analyze(options Options) (Report, error) {
 	return report, nil
 }
 
-func (analyzer *Analyzer) analyzeFile(path, relative string, match coverageMatch, changes changedFiles, options Options) ([]MethodResult, *Diagnostic, error) {
-	source, err := os.ReadFile(path)
-	if err != nil {
-		return nil, nil, fmt.Errorf("read %s: %w", path, err)
-	}
+func (analyzer *Analyzer) analyzeFile(path, relative string, source []byte, match coverageMatch, changes changedFiles, options Options) ([]MethodResult, *Diagnostic, error) {
 	language, ok := analyzer.languages[strings.ToLower(filepath.Ext(path))]
 	if !ok {
 		return nil, nil, fmt.Errorf("unsupported source file %s", path)
@@ -243,8 +297,20 @@ func (analyzer *Analyzer) analyzeFile(path, relative string, match coverageMatch
 	callables := make([]callableNode, 0)
 	collectCallableNodes(tree.RootNode(), language, 0, &callables)
 	results := make([]MethodResult, 0, len(callables))
+	occurrences := make(map[string]int)
 	for index, callable := range callables {
-		result := resultForNode(callable.node, source, path, relative, callable.kind, match.spans, callableOwnedRanges(callables, index), changes, options.CRAPThreshold, language)
+		signature := lexicalSignature(callable.node, source)
+		identity := callableIdentity(callable.node, source)
+		owner := language.qualifiedName(callable.node, source)
+		ownerIdentity := owner
+		if strings.Contains(ownerIdentity, "<anonymous@") {
+			ownerIdentity = "anonymous"
+		}
+		stableOwner := ownerIdentity + "\x00" + callableOwnerIdentity(callable.node, source, language)
+		occurrenceKey := callable.kind + "\x00" + identity + "\x00" + stableOwner
+		occurrence := occurrences[occurrenceKey]
+		occurrences[occurrenceKey]++
+		result := resultForNode(callable.node, source, path, relative, callable.kind, owner, signature, identity, stableOwner, occurrence, match.spans, callableOwnedRanges(callables, index), changes, options.CRAPThreshold, language)
 		if options.DiffBase == "" || result.Changed {
 			results = append(results, result)
 		}
@@ -285,10 +351,9 @@ func collectCallableNodes(node *treesitter.Node, language languageDefinition, de
 	}
 }
 
-func resultForNode(node *treesitter.Node, source []byte, sourcePath, file, kind string, coverage []coverageSpan, owned []lineRange, changes changedFiles, threshold float64, language languageDefinition) MethodResult {
+func resultForNode(node *treesitter.Node, source []byte, sourcePath, file, kind, name, signature, identity, stableOwner string, occurrence int, coverage []coverageSpan, owned []lineRange, changes changedFiles, threshold float64, language languageDefinition) MethodResult {
 	start := int(node.StartPosition().Row) + 1
 	end := int(node.EndPosition().Row) + 1
-	name := language.qualifiedName(node, source)
 	complexity := complexity(node, source, language)
 	covered := methodCoverage(coverage, owned)
 	coverageForScore := 0.0
@@ -297,19 +362,98 @@ func resultForNode(node *treesitter.Node, source []byte, sourcePath, file, kind 
 	}
 	score := CRAPScore(complexity, coverageForScore)
 	return MethodResult{
-		ID:              fmt.Sprintf("%s:%d:%s", file, start, name),
+		ID:              reportcontract.Fingerprint(language.name, file, kind, stableOwner, identity, strconv.Itoa(occurrence)),
 		Language:        language.name,
 		File:            file,
 		Name:            name,
 		Kind:            kind,
+		Signature:       signature,
 		StartLine:       start,
+		StartColumn:     int(node.StartPosition().Column) + 1,
 		EndLine:         end,
+		EndColumn:       int(node.EndPosition().Column) + 1,
 		Complexity:      complexity,
 		CoveragePercent: covered,
 		CRAP:            score,
 		Changed:         changes.intersects(sourcePath, start, end),
 		AboveThreshold:  score > threshold,
 	}
+}
+
+func lexicalSignature(node *treesitter.Node, source []byte) string {
+	end := node.EndByte()
+	if body := node.ChildByFieldName("body"); body != nil {
+		end = body.StartByte()
+	}
+	return strings.Join(strings.Fields(string(source[node.StartByte():end])), " ")
+}
+
+func callableIdentity(node *treesitter.Node, source []byte) string {
+	return callableStructuralIdentity(node, source, true)
+}
+
+func callableStructuralIdentity(node *treesitter.Node, source []byte, excludeBody bool) string {
+	var identity strings.Builder
+	body := node.ChildByFieldName("body")
+	var visit func(*treesitter.Node)
+	visit = func(current *treesitter.Node) {
+		if excludeBody && body != nil && current.StartByte() == body.StartByte() && current.EndByte() == body.EndByte() {
+			return
+		}
+		if strings.Contains(current.Kind(), "comment") {
+			return
+		}
+		if current.ChildCount() == 0 {
+			identity.WriteString(current.Kind())
+			identity.WriteByte(':')
+			identity.Write(source[current.StartByte():current.EndByte()])
+			identity.WriteByte(0)
+			return
+		}
+		for index := uint(0); index < current.ChildCount(); index++ {
+			visit(current.Child(index))
+		}
+	}
+	visit(node)
+	return identity.String()
+}
+
+func callableOwnerIdentity(node *treesitter.Node, source []byte, language languageDefinition) string {
+	parts := make([]string, 0)
+	seen := make(map[string]bool)
+	add := func(value string) {
+		value = strings.TrimSpace(value)
+		if value != "" && !seen[value] {
+			seen[value] = true
+			parts = append(parts, value)
+		}
+	}
+	for parent := node.Parent(); parent != nil; parent = parent.Parent() {
+		if _, ok := language.callableKinds[parent.Kind()]; ok {
+			add(language.qualifiedName(parent, source))
+		}
+		switch parent.Kind() {
+		case "variable_declarator", "public_field_definition":
+			add(nodeSource(parent.ChildByFieldName("name"), source))
+		case "pair":
+			add(nodeSource(parent.ChildByFieldName("key"), source))
+		case "assignment_expression":
+			add(nodeSource(parent.ChildByFieldName("left"), source))
+		case "class_declaration", "interface_declaration", "namespace_declaration", "module", "function_declaration", "method_definition":
+			add(nodeSource(parent.ChildByFieldName("name"), source))
+		}
+	}
+	if len(parts) == 0 {
+		return "anonymous"
+	}
+	return strings.Join(parts, "\x00")
+}
+
+func nodeSource(node *treesitter.Node, source []byte) string {
+	if node == nil {
+		return ""
+	}
+	return string(source[node.StartByte():node.EndByte()])
 }
 
 func callableOwnedRanges(callables []callableNode, target int) []lineRange {
@@ -510,6 +654,7 @@ func typescriptAssignedName(node *treesitter.Node) *treesitter.Node {
 }
 
 type sourceCollector struct {
+	root          string
 	includeTests  bool
 	seen          map[string]bool
 	files         []string
@@ -520,7 +665,7 @@ func findSourceFiles(root string, paths []string, includeTests bool, authorizati
 	if len(paths) == 0 {
 		paths = []string{"."}
 	}
-	collector := sourceCollector{includeTests: includeTests, seen: make(map[string]bool), authorization: authorization}
+	collector := sourceCollector{root: root, includeTests: includeTests, seen: make(map[string]bool), authorization: authorization}
 	for _, requested := range paths {
 		if err := collector.add(root, requested); err != nil {
 			return nil, err
@@ -540,6 +685,15 @@ func (collector *sourceCollector) add(root, requested string) error {
 		path, err = collector.authorization.Existing(path)
 		if err != nil {
 			return fmt.Errorf("authorize source %s: %w", requested, err)
+		}
+	} else {
+		var err error
+		path, err = filepath.EvalSymlinks(path)
+		if err != nil {
+			return fmt.Errorf("resolve source %s: %w", requested, err)
+		}
+		if !pathWithinRoot(collector.root, path) {
+			return fmt.Errorf("source %s is outside analysis root", requested)
 		}
 	}
 	info, err := os.Stat(path)
@@ -575,12 +729,29 @@ func (collector *sourceCollector) collect(path string) error {
 			return fmt.Errorf("authorize discovered source %s: %w", path, err)
 		}
 		path = canonical
+	} else {
+		canonical, err := filepath.EvalSymlinks(path)
+		if err != nil {
+			return fmt.Errorf("resolve discovered source %s: %w", path, err)
+		}
+		if !pathWithinRoot(collector.root, canonical) {
+			return fmt.Errorf("discovered source %s is outside analysis root", path)
+		}
+		path = canonical
 	}
 	if isSourceFile(path, collector.includeTests) && !collector.seen[path] {
 		collector.seen[path] = true
 		collector.files = append(collector.files, path)
 	}
 	return nil
+}
+
+func pathWithinRoot(root, candidate string) bool {
+	relative, err := filepath.Rel(root, candidate)
+	if err != nil {
+		return false
+	}
+	return relative == "." || (relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator)))
 }
 
 func ignoredDirectory(name string) bool {
@@ -631,4 +802,22 @@ func summarize(methods []MethodResult) Summary {
 
 func normalizePath(path string) string {
 	return strings.TrimPrefix(filepath.ToSlash(filepath.Clean(path)), "./")
+}
+
+func normalizeDisplayedPath(value string) string {
+	if value == "" || filepath.IsAbs(value) {
+		return ""
+	}
+	return normalizePath(value)
+}
+
+func semanticPath(root, value string) string {
+	if !filepath.IsAbs(value) {
+		return normalizePath(value)
+	}
+	relative, err := filepath.Rel(root, value)
+	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return ""
+	}
+	return normalizePath(relative)
 }

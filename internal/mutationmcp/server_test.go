@@ -26,13 +26,14 @@ type fakeInspector struct {
 
 func (inspect *fakeInspector) Plan(options mutation.Options) (mutation.Plan, error) {
 	inspect.received = options
-	return mutation.Plan{SchemaVersion: "1", Root: options.Root, Language: options.Language, Engine: "stryker-js", Executable: "npx", Arguments: []string{"stryker", "run"}}, nil
+	options.Authorization = nil
+	return mutation.NewService().Plan(options)
 }
 
 func (inspect *fakeInspector) Doctor(_ context.Context, options mutation.Options) (mutation.DoctorReport, error) {
 	inspect.received = options
 	plan, _ := inspect.Plan(options)
-	return mutation.DoctorReport{SchemaVersion: "1", Plan: plan, Ready: true}, nil
+	return mutation.DoctorReport{SchemaVersion: mutation.DoctorSchemaVersion, ReportType: "mutation-doctor", Tool: plan.Tool, Fingerprints: plan.Fingerprints, Plan: plan, Ready: true, Checks: []mutation.DoctorCheck{}}, nil
 }
 
 func (executor *fakeExecutor) Run(_ context.Context, options mutation.Options, _ io.Writer) (mutation.Report, error) {

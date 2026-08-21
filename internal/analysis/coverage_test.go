@@ -3,6 +3,7 @@ package analysis
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -169,6 +170,25 @@ func TestCoberturaCaseFoldedRootDoesNotBecomeExact(t *testing.T) {
 	}
 	if match := coverage.forFile("work.ts"); match.kind == "exact" {
 		t.Fatalf("case-folded root became exact: %#v", match)
+	}
+}
+
+func TestCoberturaExternalAbsolutePathDoesNotLeak(t *testing.T) {
+	root := "/agent/repo"
+	external := "/producer/private/project/work.ts"
+	xml := `<coverage><packages><package><classes><class filename="` + external + `"><lines><line number="1" hits="1"/></lines></class></classes></package></packages></coverage>`
+	coverage, err := parseCobertura([]byte(xml), root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	match := coverage.forFile("work.ts")
+	if match.kind != "suffix" {
+		t.Fatalf("external path match = %#v, want suffix", match)
+	}
+	for _, candidate := range match.candidates {
+		if strings.Contains(candidate, "/producer/") {
+			t.Fatalf("external path leaked in candidate %q", candidate)
+		}
 	}
 }
 

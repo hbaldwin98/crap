@@ -28,3 +28,29 @@ func TestFindSourceFilesExcludesGoTestsByDefault(t *testing.T) {
 		t.Fatalf("files with tests = %v, want seven source files", files)
 	}
 }
+
+func TestFindSourceFilesRejectsSourcesOutsideRoot(t *testing.T) {
+	root := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "outside.go")
+	if err := os.WriteFile(outside, []byte("package outside\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := findSourceFiles(root, []string{outside}, false, nil); err == nil {
+		t.Fatal("outside source was accepted")
+	}
+}
+
+func TestFindSourceFilesRejectsSymlinkOutsideRoot(t *testing.T) {
+	root := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "outside.go")
+	if err := os.WriteFile(outside, []byte("package outside\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(root, "link.go")
+	if err := os.Symlink(outside, link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	if _, err := findSourceFiles(root, []string{"link.go"}, false, nil); err == nil {
+		t.Fatal("outside source symlink was accepted")
+	}
+}

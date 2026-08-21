@@ -1,0 +1,9 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema", "$id": "mutation-plan-v2.schema.json",
+  "type": "object", "required": ["schemaVersion", "reportType", "tool", "fingerprints", "coordinates", "root", "language", "engine", "executable", "arguments", "reportPath", "timeoutSeconds", "minimumScore"],
+  "properties": {
+    "schemaVersion": { "const": "2" }, "reportType": { "const": "mutation-plan" }, "tool": { "$ref": "common.schema.json#/$defs/tool" }, "fingerprints": { "$ref": "common.schema.json#/$defs/fingerprints" }, "coordinates": { "$ref": "common.schema.json#/$defs/coordinates" },
+    "root": { "type": "string", "minLength": 1 }, "language": { "enum": ["csharp", "go", "typescript"] }, "engine": { "enum": ["gremlins", "stryker-net", "stryker-js"] }, "executable": { "type": "string", "minLength": 1 },
+    "arguments": { "type": "array", "items": { "type": "string" } }, "reportPath": { "type": "string", "minLength": 1 }, "timeoutSeconds": { "type": "integer", "minimum": 1 }, "minimumScore": { "type": "number", "minimum": 0, "maximum": 100 }
+  }, "additionalProperties": false
+}

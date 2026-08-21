@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema", "$id": "mutation-mcp-page-v2.schema.json",
+  "type": "object",
+  "required": ["pageSchemaVersion", "reportType", "reportId", "expiresAt", "schemaVersion", "tool", "fingerprints", "coordinates", "language", "engine", "engineIdentity", "score", "scoreSource", "minimumScore", "passed", "summary", "provenance", "page", "mutants"],
+  "properties": {
+    "pageSchemaVersion": { "const": "2" }, "reportType": { "const": "mutation-page" }, "reportId": { "type": "string", "pattern": "^[0-9a-f]{32}$" }, "expiresAt": { "type": "string", "format": "date-time" },
+    "schemaVersion": { "const": "3" }, "tool": { "$ref": "common.schema.json#/$defs/tool" }, "fingerprints": { "$ref": "common.schema.json#/$defs/fingerprints" }, "coordinates": { "$ref": "common.schema.json#/$defs/coordinates" },
+    "language": { "enum": ["csharp", "go", "typescript"] }, "engine": { "enum": ["gremlins", "stryker-net", "stryker-js"] },
+    "engineIdentity": { "type": "object", "required": ["name", "reportContract", "reportContractVersion", "reportedVersion"], "properties": { "name": { "enum": ["gremlins", "stryker-net", "stryker-js"] }, "reportContract": { "enum": ["gremlins-json", "stryker-mutation-testing-report"] }, "reportContractVersion": { "enum": ["v0.6", "2", "1.0"] }, "reportedVersion": { "type": ["string", "null"] } }, "additionalProperties": false },
+    "score": { "type": ["number", "null"], "minimum": 0, "maximum": 100 }, "scoreSource": { "enum": ["engine", "report-statuses", "unavailable"] }, "minimumScore": { "type": "number", "minimum": 0, "maximum": 100 }, "passed": { "type": "boolean" },
+    "summary": { "$ref": "common.schema.json#/$defs/mutationSummary" },
+    "provenance": { "type": "object", "required": ["nativeExitCode", "nativeReportSchemaVersion", "nativeReportSha256", "nativeBreakThreshold"], "properties": { "nativeExitCode": { "type": "integer" }, "nativeReportSchemaVersion": { "type": ["string", "null"] }, "nativeReportSha256": { "oneOf": [{ "type": "null" }, { "$ref": "common.schema.json#/$defs/digest" }] }, "nativeBreakThreshold": { "type": ["number", "null"], "minimum": 0, "maximum": 100 } }, "additionalProperties": false },
+    "page": { "type": "object", "required": ["resultMode", "totalMatched", "limit", "returned", "hasMore"], "properties": { "resultMode": { "enum": ["summary", "actionable", "all"] }, "statuses": { "type": "array", "items": { "enum": ["killed", "survived", "timedOut", "noCoverage", "compileError", "runtimeError", "ignored"] } }, "totalMatched": { "type": "integer", "minimum": 0 }, "limit": { "type": "integer", "minimum": 1, "maximum": 100 }, "returned": { "type": "integer", "minimum": 0 }, "hasMore": { "type": "boolean" }, "nextCursor": { "type": "string", "minLength": 1 } }, "additionalProperties": false },
+    "mutants": { "type": "array", "items": { "$ref": "common.schema.json#/$defs/mutant" } }
+  }, "additionalProperties": false
+}

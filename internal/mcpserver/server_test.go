@@ -70,7 +70,11 @@ func TestAnalyzeCodeToolReturnsStructuredReport(t *testing.T) {
 	if err := json.Unmarshal(data, &report); err != nil {
 		t.Fatal(err)
 	}
-	if len(report.Methods) != 2 || report.Methods[0].Language != "go" || report.Methods[1].Language != "typescript" || report.Methods[1].Complexity != 2 {
+	languages := make(map[string]int)
+	for _, method := range report.Methods {
+		languages[method.Language] = method.Complexity
+	}
+	if len(report.Methods) != 2 || languages["go"] != 2 || languages["typescript"] != 2 {
 		t.Fatalf("unexpected structured report: %#v", report)
 	}
 	if report.Page.TotalMatched != 2 || report.Page.Returned != 2 || report.Page.HasMore {
@@ -134,6 +138,17 @@ func TestCompactReportSortsEqualScoresByID(t *testing.T) {
 	result := compactReport(report, "all", 20, 0)
 	if len(result.Methods) != 2 || result.Methods[0].ID != "first" || result.Methods[1].ID != "second" {
 		t.Fatalf("methods = %#v", result.Methods)
+	}
+}
+
+func TestCompactReportAlwaysSerializesDiagnostics(t *testing.T) {
+	output := compactReport(analysis.Report{Methods: []analysis.MethodResult{}, Diagnostics: []analysis.Diagnostic{}}, "summary", 20, 0)
+	data, err := json.Marshal(output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `"diagnostics":[]`) {
+		t.Fatalf("empty diagnostics missing from MCP contract: %s", data)
 	}
 }
 

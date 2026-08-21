@@ -12,11 +12,10 @@ import (
 	"strings"
 
 	"github.com/hbaldwin98/crap/internal/analysis"
+	"github.com/hbaldwin98/crap/internal/buildinfo"
 	"github.com/hbaldwin98/crap/internal/mcpserver"
 	"github.com/hbaldwin98/crap/internal/rootauth"
 )
-
-const version = "0.1.0"
 
 type cliOptions struct {
 	paths           []string
@@ -43,7 +42,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	if options.showVersion {
-		fmt.Fprintln(stdout, version)
+		fmt.Fprintln(stdout, buildinfo.CurrentVersion())
 		return 0
 	}
 	return runAnalysis(options, stdout, stderr)
@@ -59,7 +58,7 @@ func runMCP(args []string, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "crap: MCP root policy: %v\n", err)
 		return 1
 	}
-	if err := mcpserver.Run(context.Background(), version, policy); err != nil {
+	if err := mcpserver.Run(context.Background(), buildinfo.CurrentVersion(), policy); err != nil {
 		fmt.Fprintf(stderr, "crap: MCP server: %v\n", err)
 		return 1
 	}

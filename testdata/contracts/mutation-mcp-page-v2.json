@@ -1,0 +1,7 @@
+{
+  "pageSchemaVersion": "2", "reportType": "mutation-page", "reportId": "0123456789abcdef0123456789abcdef", "expiresAt": "2026-08-21T12:00:00Z", "schemaVersion": "3",
+  "tool": {"name": "crap-mutate", "version": "0.2.0", "modified": false}, "fingerprints": {"sources": [], "coverage": null, "nativeReport": null, "git": null, "configSha256": "1111111111111111111111111111111111111111111111111111111111111111"},
+  "coordinates": {"lineBase": 1, "columnBase": 1, "columnEncoding": "engine-native", "end": "exclusive"}, "language": "typescript", "engine": "stryker-js", "engineIdentity": {"name": "stryker-js", "reportContract": "stryker-mutation-testing-report", "reportContractVersion": "1.0", "reportedVersion": null},
+  "score": null, "scoreSource": "unavailable", "minimumScore": 80, "passed": false, "summary": {"total": 0, "killed": 0, "survived": 0, "timedOut": 0, "noCoverage": 0, "compileError": 0, "runtimeError": 0, "ignored": 0, "other": 0},
+  "provenance": {"nativeExitCode": 0, "nativeReportSchemaVersion": null, "nativeReportSha256": null, "nativeBreakThreshold": null}, "page": {"resultMode": "summary", "totalMatched": 0, "limit": 20, "returned": 0, "hasMore": false}, "mutants": []
+}

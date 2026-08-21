@@ -1,8 +1,11 @@
 package mutation
 
-import "github.com/hbaldwin98/crap/internal/rootauth"
+import (
+	"github.com/hbaldwin98/crap/internal/reportcontract"
+	"github.com/hbaldwin98/crap/internal/rootauth"
+)
 
-const SchemaVersion = "2"
+const SchemaVersion = "3"
 
 type Options struct {
 	Root           string
@@ -15,25 +18,35 @@ type Options struct {
 	Authorization  *rootauth.Root
 }
 
-const PlanSchemaVersion = "1"
+const (
+	PlanSchemaVersion   = "2"
+	DoctorSchemaVersion = "1"
+)
 
 type Plan struct {
-	SchemaVersion  string   `json:"schemaVersion"`
-	Root           string   `json:"root"`
-	Language       string   `json:"language"`
-	Engine         string   `json:"engine"`
-	Executable     string   `json:"executable"`
-	Arguments      []string `json:"arguments"`
-	ReportPath     string   `json:"reportPath"`
-	TimeoutSeconds int      `json:"timeoutSeconds"`
-	MinimumScore   float64  `json:"minimumScore"`
+	SchemaVersion  string                      `json:"schemaVersion"`
+	ReportType     string                      `json:"reportType"`
+	Tool           reportcontract.ToolIdentity `json:"tool"`
+	Fingerprints   reportcontract.Fingerprints `json:"fingerprints"`
+	Coordinates    reportcontract.Coordinates  `json:"coordinates"`
+	Root           string                      `json:"root"`
+	Language       string                      `json:"language"`
+	Engine         string                      `json:"engine"`
+	Executable     string                      `json:"executable"`
+	Arguments      []string                    `json:"arguments"`
+	ReportPath     string                      `json:"reportPath"`
+	TimeoutSeconds int                         `json:"timeoutSeconds"`
+	MinimumScore   float64                     `json:"minimumScore"`
 }
 
 type DoctorReport struct {
-	SchemaVersion string        `json:"schemaVersion"`
-	Plan          Plan          `json:"plan"`
-	Ready         bool          `json:"ready"`
-	Checks        []DoctorCheck `json:"checks"`
+	SchemaVersion string                      `json:"schemaVersion"`
+	ReportType    string                      `json:"reportType"`
+	Tool          reportcontract.ToolIdentity `json:"tool"`
+	Fingerprints  reportcontract.Fingerprints `json:"fingerprints"`
+	Plan          Plan                        `json:"plan"`
+	Ready         bool                        `json:"ready"`
+	Checks        []DoctorCheck               `json:"checks"`
 }
 
 type DoctorCheck struct {
@@ -43,16 +56,28 @@ type DoctorCheck struct {
 }
 
 type Report struct {
-	SchemaVersion string         `json:"schemaVersion"`
-	Language      string         `json:"language"`
-	Engine        string         `json:"engine"`
-	Score         *float64       `json:"score"`
-	ScoreSource   string         `json:"scoreSource"`
-	MinimumScore  float64        `json:"minimumScore"`
-	Passed        bool           `json:"passed"`
-	Summary       Summary        `json:"summary"`
-	Mutants       []MutantResult `json:"mutants"`
-	Provenance    Provenance     `json:"provenance"`
+	SchemaVersion  string                      `json:"schemaVersion"`
+	ReportType     string                      `json:"reportType"`
+	Tool           reportcontract.ToolIdentity `json:"tool"`
+	Fingerprints   reportcontract.Fingerprints `json:"fingerprints"`
+	Coordinates    reportcontract.Coordinates  `json:"coordinates"`
+	Language       string                      `json:"language"`
+	Engine         string                      `json:"engine"`
+	EngineIdentity EngineIdentity              `json:"engineIdentity"`
+	Score          *float64                    `json:"score"`
+	ScoreSource    string                      `json:"scoreSource"`
+	MinimumScore   float64                     `json:"minimumScore"`
+	Passed         bool                        `json:"passed"`
+	Summary        Summary                     `json:"summary"`
+	Mutants        []MutantResult              `json:"mutants"`
+	Provenance     Provenance                  `json:"provenance"`
+}
+
+type EngineIdentity struct {
+	Name                  string  `json:"name"`
+	ReportContract        string  `json:"reportContract"`
+	ReportContractVersion string  `json:"reportContractVersion"`
+	ReportedVersion       *string `json:"reportedVersion"`
 }
 
 type Provenance struct {
@@ -75,12 +100,17 @@ type Summary struct {
 }
 
 type MutantResult struct {
-	ID          string `json:"id"`
-	File        string `json:"file"`
-	Line        int    `json:"line"`
-	Column      int    `json:"column"`
-	Mutator     string `json:"mutator"`
-	Status      string `json:"status"`
-	Replacement string `json:"replacement,omitempty"`
-	Reason      string `json:"reason,omitempty"`
+	ID          string  `json:"id"`
+	NativeID    *string `json:"nativeId"`
+	File        string  `json:"file"`
+	Line        int     `json:"line"`
+	Column      int     `json:"column"`
+	StartLine   int     `json:"startLine"`
+	StartColumn int     `json:"startColumn"`
+	EndLine     *int    `json:"endLine"`
+	EndColumn   *int    `json:"endColumn"`
+	Mutator     string  `json:"mutator"`
+	Status      string  `json:"status"`
+	Replacement string  `json:"replacement,omitempty"`
+	Reason      string  `json:"reason,omitempty"`
 }

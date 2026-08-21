@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema", "$id": "analysis-mcp-page-v1.schema.json",
+  "type": "object",
+  "required": ["pageSchemaVersion", "reportType", "schemaVersion", "tool", "fingerprints", "coordinates", "grammars", "mode", "coverage", "threshold", "summary", "page", "methods", "diagnostics"],
+  "properties": {
+    "pageSchemaVersion": { "const": "1" }, "reportType": { "const": "analysis-page" }, "schemaVersion": { "const": "4" },
+    "tool": { "$ref": "common.schema.json#/$defs/tool" }, "fingerprints": { "$ref": "common.schema.json#/$defs/fingerprints" }, "coordinates": { "$ref": "common.schema.json#/$defs/coordinates" },
+    "grammars": { "type": "array", "items": { "oneOf": [{ "const": {"language": "csharp", "version": "v0.23.5"} }, { "const": {"language": "go", "version": "v0.23.4"} }, { "const": {"language": "typescript", "version": "v0.23.2"} }, { "const": {"language": "tsx", "version": "v0.23.2"} }] } },
+    "mode": { "enum": ["all", "changed"] }, "coverage": { "type": "object", "required": ["format"], "properties": { "format": { "enum": ["none", "cobertura", "go-coverprofile"] }, "displayedPath": { "type": "string", "minLength": 1 }, "sha256": { "$ref": "common.schema.json#/$defs/digest" } }, "additionalProperties": false },
+    "diffBase": { "type": "string", "minLength": 1 }, "diffBaseCommit": { "type": "string", "minLength": 1 }, "diffHeadCommit": { "type": "string", "minLength": 1 }, "diffMergeBase": { "type": "string", "minLength": 1 },
+    "threshold": { "type": "number", "minimum": 0 }, "summary": { "$ref": "common.schema.json#/$defs/summary" },
+    "page": { "type": "object", "required": ["resultMode", "totalMatched", "offset", "limit", "returned", "hasMore"], "properties": { "resultMode": { "enum": ["summary", "violations", "highest", "all"] }, "totalMatched": { "type": "integer", "minimum": 0 }, "offset": { "type": "integer", "minimum": 0 }, "limit": { "type": "integer", "minimum": 1, "maximum": 100 }, "returned": { "type": "integer", "minimum": 0 }, "hasMore": { "type": "boolean" }, "nextOffset": { "type": "integer", "minimum": 0 } }, "additionalProperties": false },
+    "methods": { "type": "array", "items": { "$ref": "common.schema.json#/$defs/method" } }, "diagnostics": { "type": "array", "items": { "$ref": "common.schema.json#/$defs/diagnostic" } }
+  }, "additionalProperties": false
+}

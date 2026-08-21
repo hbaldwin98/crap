@@ -136,7 +136,7 @@ Accepted formats:
 - Cobertura XML, matched to C#, Go, TypeScript, or TSX source by normalized file path
 - Native Go coverprofiles produced by `go test -coverprofile`
 
-Cobertura coverage is the percentage of instrumented lines owned by a callable that have hits. Callable names and ranges always come from the C#, Go, or TypeScript AST; Cobertura method names are ignored because instrumentation and source-map processing can rewrite them. A nested callable owns its own lines, so its coverage is excluded from its parent. Go coverprofile coverage is weighted by each block's statement count.
+Cobertura coverage uses line-hit records. Go coverprofiles use their native statement counts. Callable names and ranges always come from the C#, Go, or TypeScript AST; Cobertura method names are ignored because instrumentation and source-map processing can rewrite them. A nested callable owns its own lines, so its coverage is excluded from its parent.
 
 Coverage paths are matched by exact normalized path, then by a unique component suffix, then by a unique case-insensitive match. Cobertura `<sources>` entries and both slash styles are supported. Non-exact matches produce deterministic diagnostics. Unmatched or ambiguous files retain `coveragePercent: null` and are conservatively scored as 0% coverage; use `--strict-coverage` in CI to reject those reports instead.
 
@@ -212,7 +212,7 @@ Every response includes the full analysis summary, coverage diagnostics, and a `
 
 Check `summary.aboveThreshold` for the violation count, `summary.maximumCrap` for the highest actual score, and each returned method's `aboveThreshold` field. Use the CLI JSON format when one complete unpaged report is required. The MCP server returns findings rather than a process exit code.
 
-`schemaVersion` identifies the JSON contract and changes when an incompatible report change is made.
+The analysis CLI emits analysis report schema v4. The MCP envelope has its own `pageSchemaVersion: "1"` and `reportType: "analysis-page"` while retaining the underlying report metadata.
 
 ## Mutation Testing
 
@@ -345,7 +345,7 @@ Example MCP configuration:
 }
 ```
 
-`run_mutation_tests` executes the engine once, retains an immutable normalized report for 30 minutes, and returns a compact first page plus `reportId`. The paging envelope has `pageSchemaVersion: "1"`; the nested `schemaVersion` remains the normalized mutation report contract. Actionable mode returns survived and uncovered mutants. Use the read-only `get_mutation_results` tool with `page.nextCursor` for continuation pages, or with `reportId` and a new mode/status filter to start another view. Snapshots are bounded and may be evicted; rerun the mutation tool when a report is expired or unavailable.
+`run_mutation_tests` executes the engine once, retains an immutable normalized report for 30 minutes, and returns a compact first page plus `reportId`. The paging envelope has `pageSchemaVersion: "2"` and `reportType: "mutation-page"`; the nested `schemaVersion` identifies mutation report v3. Actionable mode returns survived and uncovered mutants. Use the read-only `get_mutation_results` tool with `page.nextCursor` for continuation pages, or with `reportId` and a new mode/status filter to start another view. Snapshots are bounded and may be evicted; rerun the mutation tool when a report is expired or unavailable.
 
 The read-only `plan_mutation_run` tool validates the same authorized inputs and returns the native command plan without execution. `check_mutation_setup` additionally executes the native version probe and returns project, executable, version, and report-contract checks. Because a project-local version command can execute project code, clients must not treat this tool as read-only or auto-approve it. These tools accept the setup fields through `reportPath`; paging fields apply only to `run_mutation_tests` and `get_mutation_results`.
 
@@ -365,6 +365,16 @@ Example tool input:
 ```
 
 Both MCP servers publish initialization instructions that tell capable clients when to call their tool and forbid AI-estimated scores. These instructions are guidance, not enforcement; project-level agent rules remain the reliable way to require a tool call in a specific workflow.
+
+## Report Contracts
+
+JSON outputs carry `reportType`, `schemaVersion`, one shared tool version, coordinate semantics, and deterministic fingerprints. Analysis is v4, mutation is v3, mutation plans are v2, and mutation doctor output has its independent v1 contract. Incompatible changes increment the contract that changed; MCP page versions are independent from their underlying report versions.
+
+Coordinates are 1-based UTF-8 byte columns with exclusive ends. Analysis callable names, signatures, and ranges come from the language AST. Callable IDs hash language, normalized file path, kind, lexical signature, and same-signature occurrence, so inserting blank lines above a callable does not change its ID. Mutation wrapper IDs hash normalized file, range, mutator, and replacement; Stryker's `nativeId` and status do not affect them.
+
+`fingerprints.sources` contains normalized displayed paths and exact source-byte SHA-256 digests. Coverage metadata identifies `none`, `cobertura`, or `go-coverprofile` and can include the original displayed path and exact-byte digest. Fingerprints also cover the native mutation report, resolved Git commits when changed analysis is used, and semantic options. Absolute checkout roots and temporary report paths are not serialized into fingerprints. No timestamp is added to deterministic CLI reports; MCP mutation snapshot expiry remains envelope metadata.
+
+Published JSON Schema 2020-12 files are under [`schemas/v1`](schemas/v1), with matching golden examples under [`testdata/contracts`](testdata/contracts). The schemas reject unknown properties and constrain versions, enums, bounds, nullability, and SHA-256 formats.
 
 ## Score Definition
 

@@ -12,12 +12,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/hbaldwin98/crap/internal/buildinfo"
 	"github.com/hbaldwin98/crap/internal/mutation"
 	"github.com/hbaldwin98/crap/internal/mutationmcp"
 	"github.com/hbaldwin98/crap/internal/rootauth"
 )
-
-const version = "0.1.0"
 
 type cliOptions struct {
 	language, format, reportPath string
@@ -43,7 +42,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	if options.version {
-		fmt.Fprintln(stdout, version)
+		fmt.Fprintln(stdout, buildinfo.CurrentVersion())
 		return 0
 	}
 	options.doctor = doctor
@@ -60,7 +59,7 @@ func runMCP(args []string, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "crap-mutate: MCP root policy: %v\n", err)
 		return 1
 	}
-	if err := mutationmcp.Run(context.Background(), version, policy); err != nil {
+	if err := mutationmcp.Run(context.Background(), buildinfo.CurrentVersion(), policy); err != nil {
 		fmt.Fprintf(stderr, "crap-mutate: MCP server: %v\n", err)
 		return 1
 	}

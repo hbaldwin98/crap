@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/hbaldwin98/crap/internal/analysis"
+	"github.com/hbaldwin98/crap/internal/buildinfo"
 )
 
 func TestRunVersion(t *testing.T) {
@@ -16,7 +17,7 @@ func TestRunVersion(t *testing.T) {
 	if code := run([]string{"--version"}, &stdout, &stderr); code != 0 {
 		t.Fatalf("exit code = %d, stderr = %s", code, stderr.String())
 	}
-	if stdout.String() != version+"\n" {
+	if stdout.String() != buildinfo.CurrentVersion()+"\n" {
 		t.Fatalf("version output = %q", stdout.String())
 	}
 }
