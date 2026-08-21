@@ -69,10 +69,15 @@ func validate(options *Options) error {
 		return fmt.Errorf("timeout must be positive")
 	}
 	if options.Language == "go" {
-		for _, path := range options.Paths {
-			if path != "" && path != "." {
-				return fmt.Errorf("Gremlins does not support include paths; use a whole-module run or its project configuration")
+		if len(options.Paths) > 1 {
+			return fmt.Errorf("Gremlins accepts one package directory per run")
+		}
+		if len(options.Paths) == 1 {
+			path, err := packagePath(options.Root, options.Paths[0])
+			if err != nil {
+				return err
 			}
+			options.Paths[0] = path
 		}
 	}
 	if options.Incremental && options.Language != "typescript" {
@@ -89,7 +94,12 @@ func (service *Service) runGremlins(ctx context.Context, options Options, output
 	defer os.RemoveAll(directory)
 	reportPath := filepath.Join(directory, "mutation.json")
 	engineOutput := &tailBuffer{limit: capturedOutputLimit}
-	runErr := service.runner.Run(ctx, options.Root, "gremlins", []string{"unleash", "--output", reportPath}, io.MultiWriter(output, engineOutput))
+	args := []string{"unleash"}
+	if len(options.Paths) == 1 {
+		args = append(args, options.Paths[0])
+	}
+	args = append(args, "--output", reportPath)
+	runErr := service.runner.Run(ctx, options.Root, "gremlins", args, io.MultiWriter(output, engineOutput))
 	if ctx.Err() != nil {
 		return Report{}, commandError(ctx, runErr)
 	}
@@ -107,6 +117,28 @@ func (service *Service) runGremlins(ctx context.Context, options Options, output
 		return Report{}, fmt.Errorf("read Gremlins report: %w", err)
 	}
 	return parseGremlins(data, options.MinimumScore)
+}
+
+func packagePath(root, path string) (string, error) {
+	if path == "" {
+		path = "."
+	}
+	absolute, err := filepath.Abs(filepath.Join(root, path))
+	if err != nil {
+		return "", fmt.Errorf("resolve Go package path: %w", err)
+	}
+	relative, err := filepath.Rel(root, absolute)
+	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("Go package path must be within root")
+	}
+	info, err := os.Stat(absolute)
+	if err != nil {
+		return "", fmt.Errorf("read Go package path: %w", err)
+	}
+	if !info.IsDir() {
+		return "", fmt.Errorf("Go package path is not a directory: %s", path)
+	}
+	return filepath.ToSlash(relative), nil
 }
 
 func outputHasLine(output, expected string) bool {

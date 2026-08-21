@@ -14,7 +14,7 @@ import (
 type RunInput struct {
 	Root           string   `json:"root,omitempty" jsonschema:"Project root in which the mutation engine runs. Defaults to the MCP server working directory."`
 	Language       string   `json:"language" jsonschema:"Required language: csharp, go, or typescript."`
-	Paths          []string `json:"paths,omitempty" jsonschema:"Production source paths or globs to mutate. C# and TypeScript only; Go runs the whole module."`
+	Paths          []string `json:"paths,omitempty" jsonschema:"Production source paths or globs to mutate. Go accepts one package directory; C# and TypeScript accept engine globs."`
 	MinimumScore   *float64 `json:"minimumScore,omitempty" jsonschema:"Minimum accepted mutation score from 0 through 100. Defaults to 80."`
 	TimeoutSeconds int      `json:"timeoutSeconds,omitempty" jsonschema:"Maximum engine runtime in seconds. Defaults to 1800."`
 	Incremental    bool     `json:"incremental,omitempty" jsonschema:"Enable StrykerJS incremental mode. TypeScript only."`

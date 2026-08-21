@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"math"
 	"strings"
 	"testing"
 
@@ -65,5 +66,27 @@ func TestRunMutationTestsToolReturnsStructuredReport(t *testing.T) {
 	}
 	if err := serverSession.Wait(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestRunMutationDefaultsRootAndAcceptsScoreBoundaries(t *testing.T) {
+	for _, minimum := range []float64{0, 100} {
+		executor := &fakeExecutor{}
+		_, _, err := runMutation(context.Background(), executor, RunInput{Language: "go", MinimumScore: &minimum})
+		if err != nil {
+			t.Fatalf("minimum %v: %v", minimum, err)
+		}
+		if executor.received.Root == "" || executor.received.MinimumScore != minimum {
+			t.Fatalf("options = %#v", executor.received)
+		}
+	}
+}
+
+func TestRunMutationRejectsInvalidScores(t *testing.T) {
+	for _, minimum := range []float64{-1, 101, math.NaN(), math.Inf(1)} {
+		executor := &fakeExecutor{}
+		if _, _, err := runMutation(context.Background(), executor, RunInput{Root: t.TempDir(), Language: "go", MinimumScore: &minimum}); err == nil {
+			t.Errorf("minimum %v was accepted", minimum)
+		}
 	}
 }

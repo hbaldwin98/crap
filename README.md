@@ -264,14 +264,14 @@ Run from the directory where the native engine normally runs. Stryker.NET usuall
 # C#: paths become repeated Stryker.NET --mutate options
 crap-mutate --language csharp --minimum-score 80 --fail-on-threshold "../Example/**/*.cs"
 
-# Go: Gremlins tests the whole module
-crap-mutate --language go --minimum-score 80 --fail-on-threshold
+# Go: run one package directory at a time
+crap-mutate --language go --minimum-score 80 --fail-on-threshold ./internal/analysis
 
 # TypeScript: paths become StrykerJS --mutate values
 crap-mutate --language typescript --minimum-score 80 --fail-on-threshold "src/**/*.ts" "!src/**/*.spec.ts"
 ```
 
-Gremlins does not provide a safe include-path option, so Go accepts no path or `.`. Configure exclusions in Gremlins itself. C# and TypeScript paths use each Stryker engine's glob syntax.
+For Go, pass at most one package directory per run. The path must stay within the project root. Run the command once per package when a module has no Go package at its root; Gremlins otherwise scans recursively without collecting useful package coverage. Configure file exclusions in Gremlins itself. C# and TypeScript paths use each Stryker engine's glob syntax.
 
 The text report prints survived and uncovered mutants. JSON includes every mutant and these fields:
 

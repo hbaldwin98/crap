@@ -7,8 +7,10 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 type fakeRunner struct {
@@ -35,11 +37,17 @@ func (runner fakeRunner) Run(_ context.Context, root, name string, args []string
 
 func TestServiceRunsGremlinsAndParsesReport(t *testing.T) {
 	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "internal"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	service := &Service{runner: fakeRunner{t: t, wantName: "gremlins", writeReport: func(_ string, args []string) {
+		if len(args) < 2 || args[1] != "internal" {
+			t.Fatalf("args = %#v", args)
+		}
 		path := argumentAfter(t, args, "--output")
 		writeTestFile(t, path, `{"test_efficacy":100,"files":[]}`)
 	}}}
-	report, err := service.Run(context.Background(), Options{Root: root, Language: "go", MinimumScore: 80}, io.Discard)
+	report, err := service.Run(context.Background(), Options{Root: root, Language: "go", Paths: []string{"internal"}, MinimumScore: 80}, io.Discard)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -150,11 +158,38 @@ func TestServiceDoesNotAcceptReportAfterCancellation(t *testing.T) {
 	}
 }
 
-func TestServiceRejectsUnsupportedGoPathAndIncrementalMode(t *testing.T) {
+func TestCommandErrorDistinguishesDeadlineAndCancellation(t *testing.T) {
+	deadlineContext, cancelDeadline := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancelDeadline()
+	if err := commandError(deadlineContext, errors.New("engine stopped")); err == nil || !strings.Contains(err.Error(), "timed out") {
+		t.Fatalf("deadline error = %v", err)
+	}
+
+	canceledContext, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := commandError(canceledContext, errors.New("engine stopped")); err == nil || !strings.Contains(err.Error(), "canceled") {
+		t.Fatalf("cancellation error = %v", err)
+	}
+}
+
+func TestNpxCommandMatchesPlatform(t *testing.T) {
+	want := "npx"
+	if runtime.GOOS == "windows" {
+		want = "npx.cmd"
+	}
+	if command := npxCommand(); command != want {
+		t.Fatalf("npxCommand() = %q, want %q", command, want)
+	}
+}
+
+func TestServiceRejectsUnsafeGoPathsAndIncrementalMode(t *testing.T) {
 	root := t.TempDir()
 	service := NewService()
-	if _, err := service.Run(context.Background(), Options{Root: root, Language: "go", Paths: []string{"internal"}}, io.Discard); err == nil {
-		t.Fatal("expected Go path error")
+	outside := filepath.Dir(root)
+	for _, paths := range [][]string{{"one", "two"}, {".."}, {outside}, {"missing"}} {
+		if _, err := service.Run(context.Background(), Options{Root: root, Language: "go", Paths: paths}, io.Discard); err == nil {
+			t.Errorf("expected Go path error for %#v", paths)
+		}
 	}
 	if _, err := service.Run(context.Background(), Options{Root: root, Language: "csharp", Incremental: true}, io.Discard); err == nil {
 		t.Fatal("expected incremental mode error")

@@ -59,37 +59,24 @@ func New(version string) *mcp.Server {
 }
 
 func analyze(_ context.Context, _ *mcp.CallToolRequest, input AnalyzeInput) (*mcp.CallToolResult, AnalyzeOutput, error) {
-	root := input.Root
-	if root == "" {
-		var err error
-		root, err = os.Getwd()
-		if err != nil {
-			return nil, AnalyzeOutput{}, err
-		}
-	}
-	threshold := 30.0
-	if input.CRAPThreshold != nil {
-		threshold = *input.CRAPThreshold
-	}
-	if threshold < 0 {
-		return nil, AnalyzeOutput{}, fmt.Errorf("crapThreshold must not be negative")
-	}
-	mode := input.ResultMode
-	if mode == "" {
-		mode = "violations"
-	}
-	if mode != "summary" && mode != "violations" && mode != "highest" && mode != "all" {
-		return nil, AnalyzeOutput{}, fmt.Errorf("resultMode must be summary, violations, highest, or all")
-	}
-	limit := 20
-	if input.Limit != nil {
-		limit = *input.Limit
-	}
-	if limit < 1 || limit > 100 {
-		return nil, AnalyzeOutput{}, fmt.Errorf("limit must be between 1 and 100")
-	}
 	if input.Offset < 0 {
 		return nil, AnalyzeOutput{}, fmt.Errorf("offset must not be negative")
+	}
+	root, err := analysisRoot(input.Root)
+	if err != nil {
+		return nil, AnalyzeOutput{}, err
+	}
+	threshold, err := analysisThreshold(input.CRAPThreshold)
+	if err != nil {
+		return nil, AnalyzeOutput{}, err
+	}
+	mode, err := resultMode(input.ResultMode)
+	if err != nil {
+		return nil, AnalyzeOutput{}, err
+	}
+	limit, err := resultLimit(input.Limit)
+	if err != nil {
+		return nil, AnalyzeOutput{}, err
 	}
 	analyzer, err := analysis.NewAnalyzer()
 	if err != nil {
@@ -108,6 +95,43 @@ func analyze(_ context.Context, _ *mcp.CallToolRequest, input AnalyzeInput) (*mc
 		return nil, AnalyzeOutput{}, err
 	}
 	return nil, compactReport(report, mode, limit, input.Offset), nil
+}
+
+func analysisRoot(root string) (string, error) {
+	if root != "" {
+		return root, nil
+	}
+	return os.Getwd()
+}
+
+func analysisThreshold(value *float64) (float64, error) {
+	if value == nil {
+		return 30, nil
+	}
+	if *value < 0 {
+		return 0, fmt.Errorf("crapThreshold must not be negative")
+	}
+	return *value, nil
+}
+
+func resultMode(mode string) (string, error) {
+	if mode == "" {
+		return "violations", nil
+	}
+	if mode != "summary" && mode != "violations" && mode != "highest" && mode != "all" {
+		return "", fmt.Errorf("resultMode must be summary, violations, highest, or all")
+	}
+	return mode, nil
+}
+
+func resultLimit(value *int) (int, error) {
+	if value == nil {
+		return 20, nil
+	}
+	if *value < 1 || *value > 100 {
+		return 0, fmt.Errorf("limit must be between 1 and 100")
+	}
+	return *value, nil
 }
 
 func compactReport(report analysis.Report, mode string, limit, offset int) AnalyzeOutput {

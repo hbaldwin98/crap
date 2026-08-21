@@ -101,3 +101,26 @@ func TestCompactReportDefaultsToPagedViolations(t *testing.T) {
 		t.Fatalf("unexpected summary page: %#v", summary)
 	}
 }
+
+func TestResultModeAcceptsOnlyDocumentedModes(t *testing.T) {
+	for _, mode := range []string{"summary", "violations", "highest", "all"} {
+		got, err := resultMode(mode)
+		if err != nil || got != mode {
+			t.Errorf("resultMode(%q) = %q, %v", mode, got, err)
+		}
+	}
+	if _, err := resultMode("everything"); err == nil {
+		t.Fatal("expected unsupported result mode error")
+	}
+}
+
+func TestCompactReportSortsEqualScoresByID(t *testing.T) {
+	report := analysis.Report{Methods: []analysis.MethodResult{
+		{ID: "second", CRAP: 10},
+		{ID: "first", CRAP: 10},
+	}}
+	result := compactReport(report, "all", 20, 0)
+	if len(result.Methods) != 2 || result.Methods[0].ID != "first" || result.Methods[1].ID != "second" {
+		t.Fatalf("methods = %#v", result.Methods)
+	}
+}

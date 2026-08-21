@@ -29,11 +29,7 @@ func main() { os.Exit(run(os.Args[1:], os.Stdout, os.Stderr)) }
 
 func run(args []string, stdout, stderr io.Writer) int {
 	if len(args) > 0 && args[0] == "mcp" {
-		if err := mutationmcp.Run(context.Background(), version); err != nil {
-			fmt.Fprintf(stderr, "crap-mutate: MCP server: %v\n", err)
-			return 1
-		}
-		return 0
+		return runMCP(stderr)
 	}
 	options, ok := parseOptions(args, stderr)
 	if !ok {
@@ -43,6 +39,18 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stdout, version)
 		return 0
 	}
+	return runMutation(options, stdout, stderr)
+}
+
+func runMCP(stderr io.Writer) int {
+	if err := mutationmcp.Run(context.Background(), version); err != nil {
+		fmt.Fprintf(stderr, "crap-mutate: MCP server: %v\n", err)
+		return 1
+	}
+	return 0
+}
+
+func runMutation(options cliOptions, stdout, stderr io.Writer) int {
 	root, err := os.Getwd()
 	if err != nil {
 		fmt.Fprintf(stderr, "crap-mutate: determine working directory: %v\n", err)
@@ -61,7 +69,11 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "crap-mutate: write report: %v\n", err)
 		return 1
 	}
-	if options.fail && !report.Passed {
+	return mutationExitCode(options.fail, report.Passed)
+}
+
+func mutationExitCode(failOnThreshold, passed bool) int {
+	if failOnThreshold && !passed {
 		return 2
 	}
 	return 0

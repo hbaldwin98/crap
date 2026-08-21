@@ -39,3 +39,18 @@ func TestWriteTextShowsActionableMutants(t *testing.T) {
 		t.Fatalf("output = %s", output.String())
 	}
 }
+
+func TestMutationExitCode(t *testing.T) {
+	for _, test := range []struct {
+		fail, passed bool
+		want         int
+	}{
+		{fail: false, passed: false, want: 0},
+		{fail: true, passed: true, want: 0},
+		{fail: true, passed: false, want: 2},
+	} {
+		if got := mutationExitCode(test.fail, test.passed); got != test.want {
+			t.Errorf("mutationExitCode(%t, %t) = %d, want %d", test.fail, test.passed, got, test.want)
+		}
+	}
+}
