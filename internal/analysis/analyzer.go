@@ -2,7 +2,6 @@ package analysis
 
 import (
 	"fmt"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -11,7 +10,6 @@ import (
 
 	"github.com/hbaldwin98/crap/internal/buildinfo"
 	"github.com/hbaldwin98/crap/internal/reportcontract"
-	"github.com/hbaldwin98/crap/internal/rootauth"
 	treesitter "github.com/tree-sitter/go-tree-sitter"
 )
 
@@ -94,10 +92,11 @@ func (analyzer *Analyzer) Analyze(options Options) (Report, error) {
 			return Report{}, fmt.Errorf("resolve root links: %w", err)
 		}
 	}
-	files, err := findSourceFiles(root, options.Paths, options.IncludeTests, options.Authorization)
+	discovery, err := findSourceFiles(root, options.Paths, options.Exclude, options.IncludeTests, options.IncludeGenerated, options.Authorization)
 	if err != nil {
 		return Report{}, err
 	}
+	files := discovery.files
 	coveragePath := options.CoveragePath
 	if coveragePath != "" && !filepath.IsAbs(coveragePath) {
 		coveragePath = filepath.Join(root, coveragePath)
@@ -124,6 +123,7 @@ func (analyzer *Analyzer) Analyze(options Options) (Report, error) {
 		Coordinates:    reportcontract.DefaultCoordinates(),
 		Mode:           "all",
 		Coverage:       CoverageMetadata{Format: "none"},
+		Discovery:      discovery.metadata(),
 		DiffBase:       options.DiffBase,
 		DiffBaseCommit: changes.BaseCommit,
 		DiffHeadCommit: changes.HeadCommit,
@@ -172,13 +172,20 @@ func (analyzer *Analyzer) Analyze(options Options) (Report, error) {
 		configPaths[index] = semanticPath(root, configPaths[index])
 	}
 	sort.Strings(configPaths)
+	configExcludes := append(make([]string, 0, len(options.Exclude)), options.Exclude...)
+	sort.Strings(configExcludes)
+	configExcludes = slicesCompact(configExcludes)
 	report.Fingerprints.ConfigSHA256 = reportcontract.JSONFingerprint(struct {
-		Paths          []string `json:"paths"`
-		DiffBase       string   `json:"diffBase"`
-		Threshold      float64  `json:"threshold"`
-		IncludeTests   bool     `json:"includeTests"`
-		StrictCoverage bool     `json:"strictCoverage"`
-	}{configPaths, options.DiffBase, options.CRAPThreshold, options.IncludeTests, options.StrictCoverage})
+		Contract         string            `json:"contract"`
+		Paths            []string          `json:"paths"`
+		DiffBase         string            `json:"diffBase"`
+		Threshold        float64           `json:"threshold"`
+		IncludeTests     bool              `json:"includeTests"`
+		IncludeGenerated bool              `json:"includeGenerated"`
+		Exclude          []string          `json:"exclude"`
+		StrictCoverage   bool              `json:"strictCoverage"`
+		Discovery        DiscoveryMetadata `json:"discovery"`
+	}{SchemaVersion, configPaths, options.DiffBase, options.CRAPThreshold, options.IncludeTests, options.IncludeGenerated, configExcludes, options.StrictCoverage, report.Discovery})
 	for extension := range usedGrammars {
 		language := analyzer.languages[extension]
 		report.Grammars = append(report.Grammars, GrammarIdentity{Language: language.grammarLanguage, Version: language.grammarVersion})
@@ -453,128 +460,6 @@ func complexity(root *treesitter.Node, source []byte, language languageDefinitio
 	}
 	visit(root, true)
 	return value
-}
-
-type sourceCollector struct {
-	root          string
-	includeTests  bool
-	seen          map[string]bool
-	files         []string
-	authorization *rootauth.Root
-}
-
-func findSourceFiles(root string, paths []string, includeTests bool, authorization *rootauth.Root) ([]string, error) {
-	if len(paths) == 0 {
-		paths = []string{"."}
-	}
-	collector := sourceCollector{root: root, includeTests: includeTests, seen: make(map[string]bool), authorization: authorization}
-	for _, requested := range paths {
-		if err := collector.add(root, requested); err != nil {
-			return nil, err
-		}
-	}
-	sort.Strings(collector.files)
-	return collector.files, nil
-}
-
-func (collector *sourceCollector) add(root, requested string) error {
-	path := requested
-	if !filepath.IsAbs(path) {
-		path = filepath.Join(root, path)
-	}
-	if collector.authorization != nil {
-		var err error
-		path, err = collector.authorization.Existing(path)
-		if err != nil {
-			return fmt.Errorf("authorize source %s: %w", requested, err)
-		}
-	} else {
-		var err error
-		path, err = filepath.EvalSymlinks(path)
-		if err != nil {
-			return fmt.Errorf("resolve source %s: %w", requested, err)
-		}
-		if !pathWithinRoot(collector.root, path) {
-			return fmt.Errorf("source %s is outside analysis root", requested)
-		}
-	}
-	info, err := os.Stat(path)
-	if err != nil {
-		return fmt.Errorf("inspect %s: %w", requested, err)
-	}
-	if info.IsDir() {
-		if err := filepath.WalkDir(path, collector.visit); err != nil {
-			return fmt.Errorf("walk %s: %w", requested, err)
-		}
-		return nil
-	}
-	return collector.collect(path)
-}
-
-func (collector *sourceCollector) visit(path string, entry fs.DirEntry, walkErr error) error {
-	if walkErr != nil {
-		return walkErr
-	}
-	if entry.IsDir() && ignoredDirectory(entry.Name()) {
-		return filepath.SkipDir
-	}
-	if !entry.IsDir() {
-		return collector.collect(path)
-	}
-	return nil
-}
-
-func (collector *sourceCollector) collect(path string) error {
-	if collector.authorization != nil {
-		canonical, err := collector.authorization.Existing(path)
-		if err != nil {
-			return fmt.Errorf("authorize discovered source %s: %w", path, err)
-		}
-		path = canonical
-	} else {
-		canonical, err := filepath.EvalSymlinks(path)
-		if err != nil {
-			return fmt.Errorf("resolve discovered source %s: %w", path, err)
-		}
-		if !pathWithinRoot(collector.root, canonical) {
-			return fmt.Errorf("discovered source %s is outside analysis root", path)
-		}
-		path = canonical
-	}
-	if isSourceFile(path, collector.includeTests) && !collector.seen[path] {
-		collector.seen[path] = true
-		collector.files = append(collector.files, path)
-	}
-	return nil
-}
-
-func pathWithinRoot(root, candidate string) bool {
-	relative, err := filepath.Rel(root, candidate)
-	if err != nil {
-		return false
-	}
-	return relative == "." || (relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator)))
-}
-
-func ignoredDirectory(name string) bool {
-	return name == ".git" || name == "bin" || name == "obj" || name == "node_modules"
-}
-
-func isSourceFile(path string, includeTests bool) bool {
-	extension := strings.ToLower(filepath.Ext(path))
-	if extension == ".go" && !includeTests && strings.HasSuffix(strings.ToLower(path), "_test.go") {
-		return false
-	}
-	if (extension == ".ts" || extension == ".tsx") && !includeTests && isTypeScriptTest(path) {
-		return false
-	}
-	return extension == ".cs" || extension == ".go" || extension == ".ts" || extension == ".tsx"
-}
-
-func isTypeScriptTest(path string) bool {
-	base := strings.ToLower(filepath.Base(path))
-	return strings.HasSuffix(base, ".spec.ts") || strings.HasSuffix(base, ".test.ts") ||
-		strings.HasSuffix(base, ".spec.tsx") || strings.HasSuffix(base, ".test.tsx")
 }
 
 func summarize(methods []MethodResult) Summary {

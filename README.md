@@ -69,6 +69,8 @@ Options:
 | `--threshold SCORE` | `30` | Mark scores strictly greater than this value as above threshold. |
 | `--fail-on-threshold` | `false` | Exit with code `2` when any returned callable is above threshold. |
 | `--include-tests` | `false` | Include Go `_test.go` and TypeScript `.spec`/`.test` files. |
+| `--include-generated` | `false` | Include recognized generated C# and TypeScript files. |
+| `--exclude PATTERN` | none | Exclude a root-relative gitignore-style pattern; repeat as needed. |
 | `--strict-coverage` | `false` | Fail when a supplied coverage report has unmatched or ambiguous source paths. |
 | `--version` | | Print the version. |
 
@@ -81,6 +83,12 @@ Analyze selected paths with a maximum allowed score of 20:
 ```
 
 The threshold does not change or cap calculated scores. It sets `aboveThreshold` on each result and controls `--fail-on-threshold`. A score equal to the threshold passes; a score greater than it fails.
+
+### Source Discovery
+
+Directory analysis honors repository `.gitignore` files and an optional root `.crapignore`, both with gitignore pattern semantics. `--exclude` adds non-negated root-relative exclusions. Explicitly named source files override `.gitignore`, `.crapignore`, generated-file, and test-file defaults, but not `--exclude`; explicitly named unsupported files fail instead of disappearing silently.
+
+Built-in directory exclusions cover `.git`, `node_modules`, `.next`, `bin`, and `obj` at any depth, plus root `vendor`, `dist`, `build`, and `coverage`. Generated files such as `*.g.cs`, `*.generated.cs`, `*.designer.cs`, `*.d.ts`, and `*.generated.ts` are excluded unless `--include-generated` is set. JSON reports include a compact `discovery` section with the selected count and deterministic exclusion counts/examples.
 
 Exit codes:
 
@@ -189,6 +197,8 @@ The server exposes one tool, `analyze_code`. Its inputs are:
 | `diffBase` | string | none | Return only callables changed from this Git revision. |
 | `crapThreshold` | number | `30` | Mark scores strictly greater than this value as above threshold. |
 | `includeTests` | boolean | `false` | Include Go `_test.go` and TypeScript `.spec`/`.test` files. |
+| `includeGenerated` | boolean | `false` | Include recognized generated C# and TypeScript files. |
+| `exclude` | string array | none | Add root-relative gitignore-style exclusions; negated entries are rejected. |
 | `strictCoverage` | boolean | `false` | Fail when supplied coverage paths are unmatched or ambiguous. |
 | `resultMode` | string | `violations` | Return `summary`, `violations`, `highest`, or `all` methods. |
 | `limit` | integer | `20` | Return at most this many methods; maximum `100`. |
@@ -212,7 +222,7 @@ Every response includes the full analysis summary, coverage diagnostics, and a `
 
 Check `summary.aboveThreshold` for the violation count, `summary.maximumCrap` for the highest actual score, and each returned method's `aboveThreshold` field. Use the CLI JSON format when one complete unpaged report is required. The MCP server returns findings rather than a process exit code.
 
-The analysis CLI emits analysis report schema v5. The MCP envelope has its own `pageSchemaVersion: "2"` and `reportType: "analysis-page"` while retaining the underlying report metadata.
+The analysis CLI emits analysis report schema v6. The MCP envelope has its own `pageSchemaVersion: "3"` and `reportType: "analysis-page"` while retaining the underlying report metadata.
 
 ## Mutation Testing
 
@@ -368,7 +378,7 @@ Both MCP servers publish initialization instructions that tell capable clients w
 
 ## Report Contracts
 
-JSON outputs carry `reportType`, `schemaVersion`, one shared tool version, coordinate semantics, and deterministic fingerprints. Analysis is v5, mutation is v3, mutation plans are v2, and mutation doctor output has its independent v1 contract. Incompatible changes increment the contract that changed; MCP page versions are independent from their underlying report versions. The v5 analysis contract adds Go function literals and C# lambdas, anonymous methods, and expression-bodied properties/indexers as independently scored callables.
+JSON outputs carry `reportType`, `schemaVersion`, one shared tool version, coordinate semantics, and deterministic fingerprints. Analysis is v6, mutation is v3, mutation plans are v2, and mutation doctor output has its independent v1 contract. Incompatible changes increment the contract that changed; MCP page versions are independent from their underlying report versions. Analysis v5 added Go function literals and C# lambdas, anonymous methods, and expression-bodied properties/indexers. Analysis v6 adds deterministic source-discovery policy and metadata.
 
 Coordinates are 1-based UTF-8 byte columns with exclusive ends. Analysis callable names, signatures, and ranges come from the language AST. Callable IDs hash language, normalized file path, kind, lexical signature, and same-signature occurrence, so inserting blank lines above a callable does not change its ID. Mutation wrapper IDs hash normalized file, range, mutator, and replacement; Stryker's `nativeId` and status do not affect them.
 

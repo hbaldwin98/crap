@@ -21,6 +21,9 @@ func TestAnalyzeCodeToolReturnsStructuredReport(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "sample.ts"), []byte("export const choose = (ok: boolean) => ok ? 1 : 0;\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(root, "excluded.go"), []byte("package sample\nfunc Excluded() {}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 
 	ctx := context.Background()
 	policy, err := rootauth.New(root)
@@ -52,7 +55,8 @@ func TestAnalyzeCodeToolReturnsStructuredReport(t *testing.T) {
 		Name: "analyze_code",
 		Arguments: map[string]any{
 			"root":       root,
-			"paths":      []string{"sample.go", "sample.ts"},
+			"paths":      []string{"."},
+			"exclude":    []string{"excluded.go"},
 			"resultMode": "all",
 		},
 	})
@@ -80,6 +84,12 @@ func TestAnalyzeCodeToolReturnsStructuredReport(t *testing.T) {
 	if report.Page.TotalMatched != 2 || report.Page.Returned != 2 || report.Page.HasMore {
 		t.Fatalf("unexpected page: %#v", report.Page)
 	}
+	if report.SchemaVersion != "6" || report.PageSchemaVersion != "3" || report.Discovery.Selected != 2 {
+		t.Fatalf("unexpected contract or discovery metadata: %#v", report)
+	}
+	if len(report.Discovery.Exclusions) != 1 || report.Discovery.Exclusions[0].Reason != "explicit" {
+		t.Fatalf("exclude input was not propagated: %#v", report.Discovery)
+	}
 
 	if err := clientSession.Close(); err != nil {
 		t.Fatal(err)
@@ -96,7 +106,7 @@ func TestCompactReportDefaultsToPagedViolations(t *testing.T) {
 		{ID: "first", CRAP: 50, AboveThreshold: true},
 	}
 	report := analysis.Report{
-		SchemaVersion: "3", DiffBase: "main", DiffBaseCommit: "base", DiffHeadCommit: "head", DiffMergeBase: "merge",
+		SchemaVersion: "6", DiffBase: "main", DiffBaseCommit: "base", DiffHeadCommit: "head", DiffMergeBase: "merge",
 		Threshold: 30, Summary: analysis.Summary{Methods: 3, AboveThreshold: 2}, Methods: methods,
 		Diagnostics: []analysis.Diagnostic{{Severity: "warning", Code: "coverage-path-suffix-matched", Path: "work.ts"}},
 	}
@@ -105,7 +115,7 @@ func TestCompactReportDefaultsToPagedViolations(t *testing.T) {
 	if len(first.Methods) != 1 || first.Methods[0].ID != "first" || first.Page.TotalMatched != 2 || !first.Page.HasMore || first.Page.NextOffset == nil || *first.Page.NextOffset != 1 {
 		t.Fatalf("unexpected first page: %#v", first)
 	}
-	if first.SchemaVersion != "3" || first.DiffBaseCommit != "base" || first.DiffHeadCommit != "head" || first.DiffMergeBase != "merge" || len(first.Diagnostics) != 1 {
+	if first.SchemaVersion != "6" || first.PageSchemaVersion != "3" || first.DiffBaseCommit != "base" || first.DiffHeadCommit != "head" || first.DiffMergeBase != "merge" || len(first.Diagnostics) != 1 {
 		t.Fatalf("diff metadata was not preserved: %#v", first)
 	}
 	second := compactReport(report, "violations", 1, 1)

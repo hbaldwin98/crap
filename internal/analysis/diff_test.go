@@ -165,8 +165,11 @@ func TestGitChangedLinesUsesRepositoryRootAndMergeBase(t *testing.T) {
 	writeDiffTestFile(t, tracked, "package internal\n\nfunc work() {\n\tprintln(2)\n}\n")
 	untracked := filepath.Join(repositoryRoot, "internal", "new file.go")
 	writeDiffTestFile(t, untracked, "package internal\n\nfunc added() {}\n")
+	ignoredUntracked := filepath.Join(repositoryRoot, "internal", "explicit.go")
+	writeDiffTestFile(t, ignoredUntracked, "package internal\n\nfunc explicit() {}\n")
+	writeDiffTestFile(t, filepath.Join(repositoryRoot, ".gitignore"), "internal/explicit.go\n")
 
-	changes, err := gitChangedLines(filepath.Join(repositoryRoot, "internal"), baseCommit, []string{tracked, untracked}, execGitRunner{})
+	changes, err := gitChangedLines(filepath.Join(repositoryRoot, "internal"), baseCommit, []string{tracked, untracked, ignoredUntracked}, execGitRunner{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -178,6 +181,9 @@ func TestGitChangedLinesUsesRepositoryRootAndMergeBase(t *testing.T) {
 	}
 	if !changes.intersects(untracked, 3, 3) {
 		t.Fatalf("untracked source did not intersect callable: %#v", changes.Files)
+	}
+	if !changes.intersects(ignoredUntracked, 3, 3) {
+		t.Fatalf("explicit ignored source did not intersect callable: %#v", changes.Files)
 	}
 }
 

@@ -100,7 +100,9 @@ func gitChangedLines(root, base string, sourceFiles []string, runner gitRunner, 
 		for filename, ranges := range parsed {
 			files[filename] = mergeRanges(append(files[filename], ranges...))
 		}
-		untrackedArgs := []string{"ls-files", "-z", "--others", "--exclude-standard", "--"}
+		// Discovery already applied ignore policy. Ask Git for every selected
+		// untracked source so explicitly requested ignored files remain changed.
+		untrackedArgs := []string{"ls-files", "-z", "--others", "--"}
 		untrackedArgs = append(untrackedArgs, batch...)
 		untracked, err := runner.Output(repositoryRoot, untrackedArgs...)
 		if err != nil {
@@ -179,7 +181,7 @@ func addUntrackedFiles(result map[string][]lineRange, repositoryRoot string, out
 		if filename == "" {
 			continue
 		}
-		if !isSourceFile(filename, true) {
+		if !supportedSource(filename) {
 			continue
 		}
 		if err := addUntrackedFile(result, repositoryRoot, filename); err != nil {

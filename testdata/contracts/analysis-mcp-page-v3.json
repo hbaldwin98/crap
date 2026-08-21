@@ -1,0 +1,7 @@
+{
+  "pageSchemaVersion": "3", "reportType": "analysis-page", "schemaVersion": "6", "tool": {"name": "crap", "version": "0.2.0", "modified": false},
+  "fingerprints": {"sources": [], "coverage": null, "nativeReport": null, "git": null, "configSha256": "1111111111111111111111111111111111111111111111111111111111111111"},
+  "coordinates": {"lineBase": 1, "columnBase": 1, "columnEncoding": "utf-8-bytes", "end": "exclusive"}, "grammars": [], "mode": "all", "coverage": {"format": "none"}, "discovery": {"selected": 0, "exclusions": []}, "threshold": 30,
+  "summary": {"files": 0, "methods": 0, "changedMethods": 0, "aboveThreshold": 0, "averageComplexity": 0, "averageCrap": 0, "maximumCrap": 0},
+  "page": {"resultMode": "summary", "totalMatched": 0, "offset": 0, "limit": 20, "returned": 0, "hasMore": false}, "methods": [], "diagnostics": []
+}

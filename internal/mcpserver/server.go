@@ -13,16 +13,18 @@ import (
 )
 
 type AnalyzeInput struct {
-	Root           string   `json:"root,omitempty" jsonschema:"Working directory used to resolve paths, coverage, and Git revisions. Defaults to the MCP server working directory."`
-	Paths          []string `json:"paths,omitempty" jsonschema:"C#, Go, TypeScript, or TSX files and directories to analyze, relative to root. Defaults to the root directory."`
-	CoveragePath   string   `json:"coveragePath,omitempty" jsonschema:"Cobertura XML or Go coverprofile path, relative to root. Omit to score with unknown coverage treated as zero."`
-	DiffBase       string   `json:"diffBase,omitempty" jsonschema:"Git revision whose merge base with HEAD defines changed mode. Returns callables intersecting added, modified, or deletion-anchored current lines."`
-	CRAPThreshold  *float64 `json:"crapThreshold,omitempty" jsonschema:"Score above which a callable is flagged. Defaults to 30."`
-	IncludeTests   bool     `json:"includeTests,omitempty" jsonschema:"Include Go _test.go and TypeScript .spec/.test files. Defaults to false."`
-	StrictCoverage bool     `json:"strictCoverage,omitempty" jsonschema:"Fail when a supplied coverage report has an unmatched or ambiguous analyzed source path."`
-	ResultMode     string   `json:"resultMode,omitempty" jsonschema:"Method detail to return: summary, violations, highest, or all. Defaults to violations."`
-	Limit          *int     `json:"limit,omitempty" jsonschema:"Maximum method details per response, from 1 through 100. Defaults to 20."`
-	Offset         int      `json:"offset,omitempty" jsonschema:"Zero-based offset into matching method details. Defaults to 0."`
+	Root             string   `json:"root,omitempty" jsonschema:"Working directory used to resolve paths, coverage, and Git revisions. Defaults to the MCP server working directory."`
+	Paths            []string `json:"paths,omitempty" jsonschema:"C#, Go, TypeScript, or TSX files and directories to analyze, relative to root. Defaults to the root directory."`
+	CoveragePath     string   `json:"coveragePath,omitempty" jsonschema:"Cobertura XML or Go coverprofile path, relative to root. Omit to score with unknown coverage treated as zero."`
+	DiffBase         string   `json:"diffBase,omitempty" jsonschema:"Git revision whose merge base with HEAD defines changed mode. Returns callables intersecting added, modified, or deletion-anchored current lines."`
+	CRAPThreshold    *float64 `json:"crapThreshold,omitempty" jsonschema:"Score above which a callable is flagged. Defaults to 30."`
+	IncludeTests     bool     `json:"includeTests,omitempty" jsonschema:"Include Go _test.go and TypeScript .spec/.test files. Defaults to false."`
+	IncludeGenerated bool     `json:"includeGenerated,omitempty" jsonschema:"Include generated source conventions such as .g.cs, .designer.cs, .d.ts, and .generated.ts. Defaults to false."`
+	Exclude          []string `json:"exclude,omitempty" jsonschema:"Root-relative source exclusion patterns using gitignore syntax. Negated patterns are not accepted."`
+	StrictCoverage   bool     `json:"strictCoverage,omitempty" jsonschema:"Fail when a supplied coverage report has an unmatched or ambiguous analyzed source path."`
+	ResultMode       string   `json:"resultMode,omitempty" jsonschema:"Method detail to return: summary, violations, highest, or all. Defaults to violations."`
+	Limit            *int     `json:"limit,omitempty" jsonschema:"Maximum method details per response, from 1 through 100. Defaults to 20."`
+	Offset           int      `json:"offset,omitempty" jsonschema:"Zero-based offset into matching method details. Defaults to 0."`
 }
 
 type AnalyzeOutput struct {
@@ -35,6 +37,7 @@ type AnalyzeOutput struct {
 	Grammars          []analysis.GrammarIdentity  `json:"grammars"`
 	Mode              string                      `json:"mode"`
 	Coverage          analysis.CoverageMetadata   `json:"coverage"`
+	Discovery         analysis.DiscoveryMetadata  `json:"discovery"`
 	DiffBase          string                      `json:"diffBase,omitempty"`
 	DiffBaseCommit    string                      `json:"diffBaseCommit,omitempty"`
 	DiffHeadCommit    string                      `json:"diffHeadCommit,omitempty"`
@@ -106,14 +109,16 @@ func analyze(_ context.Context, _ *mcp.CallToolRequest, input AnalyzeInput, poli
 	}
 	defer analyzer.Close()
 	report, err := analyzer.Analyze(analysis.Options{
-		Root:           root,
-		Paths:          input.Paths,
-		CoveragePath:   input.CoveragePath,
-		DiffBase:       input.DiffBase,
-		CRAPThreshold:  threshold,
-		IncludeTests:   input.IncludeTests,
-		StrictCoverage: input.StrictCoverage,
-		Authorization:  scope,
+		Root:             root,
+		Paths:            input.Paths,
+		CoveragePath:     input.CoveragePath,
+		DiffBase:         input.DiffBase,
+		CRAPThreshold:    threshold,
+		IncludeTests:     input.IncludeTests,
+		IncludeGenerated: input.IncludeGenerated,
+		Exclude:          input.Exclude,
+		StrictCoverage:   input.StrictCoverage,
+		Authorization:    scope,
 	})
 	if err != nil {
 		return nil, AnalyzeOutput{}, err
@@ -189,9 +194,9 @@ func compactReport(report analysis.Report, mode string, limit, offset int) Analy
 		page.NextOffset = &next
 	}
 	return AnalyzeOutput{
-		PageSchemaVersion: "2", ReportType: "analysis-page", SchemaVersion: report.SchemaVersion,
+		PageSchemaVersion: "3", ReportType: "analysis-page", SchemaVersion: report.SchemaVersion,
 		Tool: report.Tool, Fingerprints: report.Fingerprints, Coordinates: report.Coordinates, Grammars: append(make([]analysis.GrammarIdentity, 0, len(report.Grammars)), report.Grammars...),
-		Mode: report.Mode, Coverage: report.Coverage,
+		Mode: report.Mode, Coverage: report.Coverage, Discovery: report.Discovery,
 		DiffBase: report.DiffBase, DiffBaseCommit: report.DiffBaseCommit,
 		DiffHeadCommit: report.DiffHeadCommit, DiffMergeBase: report.DiffMergeBase,
 		Threshold: report.Threshold, Summary: report.Summary,

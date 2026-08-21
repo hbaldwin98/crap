@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "analysis-report-v6.schema.json",
+  "type": "object",
+  "required": ["schemaVersion", "reportType", "tool", "fingerprints", "coordinates", "grammars", "mode", "coverage", "discovery", "threshold", "summary", "methods", "diagnostics"],
+  "properties": {
+    "schemaVersion": { "const": "6" }, "reportType": { "const": "analysis" },
+    "tool": { "$ref": "common.schema.json#/$defs/tool" }, "fingerprints": { "$ref": "common.schema.json#/$defs/fingerprints" },
+    "coordinates": { "$ref": "common.schema.json#/$defs/coordinates" },
+    "grammars": { "type": "array", "items": { "oneOf": [{ "const": {"language": "csharp", "version": "v0.23.5"} }, { "const": {"language": "go", "version": "v0.23.4"} }, { "const": {"language": "typescript", "version": "v0.23.2"} }, { "const": {"language": "tsx", "version": "v0.23.2"} }] } },
+    "mode": { "enum": ["all", "changed"] },
+    "coverage": { "type": "object", "required": ["format"], "properties": { "format": { "enum": ["none", "cobertura", "go-coverprofile"] }, "displayedPath": { "type": "string", "minLength": 1 }, "sha256": { "$ref": "common.schema.json#/$defs/digest" } }, "additionalProperties": false },
+    "discovery": { "type": "object", "required": ["selected", "exclusions"], "properties": { "selected": { "type": "integer", "minimum": 0 }, "exclusions": { "type": "array", "items": { "type": "object", "required": ["reason", "count", "examples"], "properties": { "reason": { "enum": ["built-in", "crapignore", "explicit", "generated", "gitignore", "test"] }, "count": { "type": "integer", "minimum": 1 }, "examples": { "type": "array", "maxItems": 5, "items": { "$ref": "common.schema.json#/$defs/relativePath" } } }, "additionalProperties": false } } }, "additionalProperties": false },
+    "diffBase": { "type": "string", "minLength": 1 }, "diffBaseCommit": { "type": "string", "minLength": 1 }, "diffHeadCommit": { "type": "string", "minLength": 1 }, "diffMergeBase": { "type": "string", "minLength": 1 },
+    "threshold": { "type": "number", "minimum": 0 }, "summary": { "$ref": "common.schema.json#/$defs/summary" },
+    "methods": { "type": "array", "items": { "$ref": "common.schema.json#/$defs/method" } },
+    "diagnostics": { "type": "array", "items": { "$ref": "common.schema.json#/$defs/diagnostic" } }
+  },
+  "additionalProperties": false
+}

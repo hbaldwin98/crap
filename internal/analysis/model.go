@@ -5,17 +5,19 @@ import (
 	"github.com/hbaldwin98/crap/internal/rootauth"
 )
 
-const SchemaVersion = "5"
+const SchemaVersion = "6"
 
 type Options struct {
-	Paths          []string
-	CoveragePath   string
-	DiffBase       string
-	Root           string
-	CRAPThreshold  float64
-	IncludeTests   bool
-	StrictCoverage bool
-	Authorization  *rootauth.Root
+	Paths            []string
+	CoveragePath     string
+	DiffBase         string
+	Root             string
+	CRAPThreshold    float64
+	IncludeTests     bool
+	IncludeGenerated bool
+	Exclude          []string
+	StrictCoverage   bool
+	Authorization    *rootauth.Root
 }
 
 type Report struct {
@@ -27,6 +29,7 @@ type Report struct {
 	Grammars       []GrammarIdentity           `json:"grammars"`
 	Mode           string                      `json:"mode"`
 	Coverage       CoverageMetadata            `json:"coverage"`
+	Discovery      DiscoveryMetadata           `json:"discovery"`
 	DiffBase       string                      `json:"diffBase,omitempty"`
 	DiffBaseCommit string                      `json:"diffBaseCommit,omitempty"`
 	DiffHeadCommit string                      `json:"diffHeadCommit,omitempty"`
@@ -35,6 +38,17 @@ type Report struct {
 	Summary        Summary                     `json:"summary"`
 	Methods        []MethodResult              `json:"methods"`
 	Diagnostics    []Diagnostic                `json:"diagnostics"`
+}
+
+type DiscoveryMetadata struct {
+	Selected   int                  `json:"selected"`
+	Exclusions []DiscoveryExclusion `json:"exclusions"`
+}
+
+type DiscoveryExclusion struct {
+	Reason   string   `json:"reason"`
+	Count    int      `json:"count"`
+	Examples []string `json:"examples"`
 }
 
 type CoverageMetadata struct {

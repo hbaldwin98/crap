@@ -74,8 +74,8 @@ func TestRunRejectsInvalidOptions(t *testing.T) {
 
 func TestParseOptionsAcceptsStrictCoverage(t *testing.T) {
 	var stderr bytes.Buffer
-	options, ok := parseOptions([]string{"--strict-coverage", "src"}, &stderr)
-	if !ok || !options.strictCoverage || len(options.paths) != 1 || options.paths[0] != "src" {
+	options, ok := parseOptions([]string{"--strict-coverage", "--include-generated", "--exclude", "dist/**", "--exclude", "vendor/**", "src"}, &stderr)
+	if !ok || !options.strictCoverage || !options.includeGenerated || len(options.excludes) != 2 || len(options.paths) != 1 || options.paths[0] != "src" {
 		t.Fatalf("options = %#v, ok = %v, stderr = %s", options, ok, stderr.String())
 	}
 }
