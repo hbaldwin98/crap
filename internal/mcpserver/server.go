@@ -14,7 +14,7 @@ type AnalyzeInput struct {
 	Root          string   `json:"root,omitempty" jsonschema:"Working directory used to resolve paths, coverage, and Git revisions. Defaults to the MCP server working directory."`
 	Paths         []string `json:"paths,omitempty" jsonschema:"C#, Go, TypeScript, or TSX files and directories to analyze, relative to root. Defaults to the root directory."`
 	CoveragePath  string   `json:"coveragePath,omitempty" jsonschema:"Cobertura XML or Go coverprofile path, relative to root. Omit to score with unknown coverage treated as zero."`
-	DiffBase      string   `json:"diffBase,omitempty" jsonschema:"Git revision to compare against. When set, return only callables intersecting added or modified lines."`
+	DiffBase      string   `json:"diffBase,omitempty" jsonschema:"Git revision whose merge base with HEAD defines changed mode. Returns callables intersecting added, modified, or deletion-anchored current lines."`
 	CRAPThreshold *float64 `json:"crapThreshold,omitempty" jsonschema:"Score above which a callable is flagged. Defaults to 30."`
 	IncludeTests  bool     `json:"includeTests,omitempty" jsonschema:"Include Go _test.go and TypeScript .spec/.test files. Defaults to false."`
 	ResultMode    string   `json:"resultMode,omitempty" jsonschema:"Method detail to return: summary, violations, highest, or all. Defaults to violations."`
@@ -23,14 +23,17 @@ type AnalyzeInput struct {
 }
 
 type AnalyzeOutput struct {
-	SchemaVersion string                  `json:"schemaVersion"`
-	Mode          string                  `json:"mode"`
-	Coverage      string                  `json:"coverage,omitempty"`
-	DiffBase      string                  `json:"diffBase,omitempty"`
-	Threshold     float64                 `json:"threshold"`
-	Summary       analysis.Summary        `json:"summary"`
-	Page          Page                    `json:"page"`
-	Methods       []analysis.MethodResult `json:"methods"`
+	SchemaVersion  string                  `json:"schemaVersion"`
+	Mode           string                  `json:"mode"`
+	Coverage       string                  `json:"coverage,omitempty"`
+	DiffBase       string                  `json:"diffBase,omitempty"`
+	DiffBaseCommit string                  `json:"diffBaseCommit,omitempty"`
+	DiffHeadCommit string                  `json:"diffHeadCommit,omitempty"`
+	DiffMergeBase  string                  `json:"diffMergeBase,omitempty"`
+	Threshold      float64                 `json:"threshold"`
+	Summary        analysis.Summary        `json:"summary"`
+	Page           Page                    `json:"page"`
+	Methods        []analysis.MethodResult `json:"methods"`
 }
 
 type Page struct {
@@ -164,7 +167,9 @@ func compactReport(report analysis.Report, mode string, limit, offset int) Analy
 	}
 	return AnalyzeOutput{
 		SchemaVersion: report.SchemaVersion, Mode: report.Mode, Coverage: report.Coverage,
-		DiffBase: report.DiffBase, Threshold: report.Threshold, Summary: report.Summary,
+		DiffBase: report.DiffBase, DiffBaseCommit: report.DiffBaseCommit,
+		DiffHeadCommit: report.DiffHeadCommit, DiffMergeBase: report.DiffMergeBase,
+		Threshold: report.Threshold, Summary: report.Summary,
 		Page: page, Methods: pageMethods,
 	}
 }

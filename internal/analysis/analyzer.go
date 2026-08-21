@@ -80,6 +80,7 @@ type languageDefinition struct {
 
 type Analyzer struct {
 	languages map[string]languageDefinition
+	git       gitRunner
 }
 
 func NewAnalyzer() (*Analyzer, error) {
@@ -126,7 +127,7 @@ func NewAnalyzer() (*Analyzer, error) {
 			name: "typescript", parser: tsxParser, callableKinds: typescriptCallableKinds, branchKinds: typescriptBranchKinds,
 			logicalOps: map[string]bool{"&&": true, "||": true, "??": true}, qualifiedName: typescriptQualifiedName,
 		},
-	}}, nil
+	}, git: execGitRunner{}}, nil
 }
 
 func (analyzer *Analyzer) Close() {
@@ -152,18 +153,21 @@ func (analyzer *Analyzer) Analyze(options Options) (Report, error) {
 	if err != nil {
 		return Report{}, err
 	}
-	changes, err := gitChangedLines(root, options.DiffBase)
+	changes, err := gitChangedLines(root, options.DiffBase, files, analyzer.git)
 	if err != nil {
 		return Report{}, err
 	}
 
 	report := Report{
-		SchemaVersion: SchemaVersion,
-		Mode:          "all",
-		Coverage:      options.CoveragePath,
-		DiffBase:      options.DiffBase,
-		Threshold:     options.CRAPThreshold,
-		Methods:       make([]MethodResult, 0),
+		SchemaVersion:  SchemaVersion,
+		Mode:           "all",
+		Coverage:       options.CoveragePath,
+		DiffBase:       options.DiffBase,
+		DiffBaseCommit: changes.BaseCommit,
+		DiffHeadCommit: changes.HeadCommit,
+		DiffMergeBase:  changes.MergeBase,
+		Threshold:      options.CRAPThreshold,
+		Methods:        make([]MethodResult, 0),
 	}
 	if options.DiffBase != "" {
 		report.Mode = "changed"
@@ -187,7 +191,7 @@ func (analyzer *Analyzer) Analyze(options Options) (Report, error) {
 	return report, nil
 }
 
-func (analyzer *Analyzer) analyzeFile(root, path string, coverage coverageData, changes changedLines, options Options) ([]MethodResult, error) {
+func (analyzer *Analyzer) analyzeFile(root, path string, coverage coverageData, changes changedFiles, options Options) ([]MethodResult, error) {
 	source, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("read %s: %w", path, err)
@@ -212,23 +216,23 @@ func (analyzer *Analyzer) analyzeFile(root, path string, coverage coverageData, 
 	relative = normalizePath(relative)
 	fileCoverage := coverage.forFile(relative)
 	results := make([]MethodResult, 0)
-	collectCallables(tree.RootNode(), source, relative, fileCoverage, changes, options, language, &results)
+	collectCallables(tree.RootNode(), source, path, relative, fileCoverage, changes, options, language, &results)
 	return results, nil
 }
 
-func collectCallables(node *treesitter.Node, source []byte, file string, coverage []coverageSpan, changes changedLines, options Options, language languageDefinition, results *[]MethodResult) {
+func collectCallables(node *treesitter.Node, source []byte, sourcePath, file string, coverage []coverageSpan, changes changedFiles, options Options, language languageDefinition, results *[]MethodResult) {
 	if kind, ok := language.callableKinds[node.Kind()]; ok {
-		result := resultForNode(node, source, file, kind, coverage, changes, options.CRAPThreshold, language)
+		result := resultForNode(node, source, sourcePath, file, kind, coverage, changes, options.CRAPThreshold, language)
 		if options.DiffBase == "" || result.Changed {
 			*results = append(*results, result)
 		}
 	}
 	for index := uint(0); index < node.NamedChildCount(); index++ {
-		collectCallables(node.NamedChild(index), source, file, coverage, changes, options, language, results)
+		collectCallables(node.NamedChild(index), source, sourcePath, file, coverage, changes, options, language, results)
 	}
 }
 
-func resultForNode(node *treesitter.Node, source []byte, file, kind string, coverage []coverageSpan, changes changedLines, threshold float64, language languageDefinition) MethodResult {
+func resultForNode(node *treesitter.Node, source []byte, sourcePath, file, kind string, coverage []coverageSpan, changes changedFiles, threshold float64, language languageDefinition) MethodResult {
 	start := int(node.StartPosition().Row) + 1
 	end := int(node.EndPosition().Row) + 1
 	name := language.qualifiedName(node, source)
@@ -250,7 +254,7 @@ func resultForNode(node *treesitter.Node, source []byte, file, kind string, cove
 		Complexity:      complexity,
 		CoveragePercent: covered,
 		CRAP:            score,
-		Changed:         changes.intersects(file, start, end),
+		Changed:         changes.intersects(sourcePath, start, end),
 		AboveThreshold:  score > threshold,
 	}
 }

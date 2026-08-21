@@ -1,6 +1,6 @@
 package analysis
 
-const SchemaVersion = "1"
+const SchemaVersion = "2"
 
 type Options struct {
 	Paths         []string
@@ -12,13 +12,16 @@ type Options struct {
 }
 
 type Report struct {
-	SchemaVersion string         `json:"schemaVersion"`
-	Mode          string         `json:"mode"`
-	Coverage      string         `json:"coverage,omitempty"`
-	DiffBase      string         `json:"diffBase,omitempty"`
-	Threshold     float64        `json:"threshold"`
-	Summary       Summary        `json:"summary"`
-	Methods       []MethodResult `json:"methods"`
+	SchemaVersion  string         `json:"schemaVersion"`
+	Mode           string         `json:"mode"`
+	Coverage       string         `json:"coverage,omitempty"`
+	DiffBase       string         `json:"diffBase,omitempty"`
+	DiffBaseCommit string         `json:"diffBaseCommit,omitempty"`
+	DiffHeadCommit string         `json:"diffHeadCommit,omitempty"`
+	DiffMergeBase  string         `json:"diffMergeBase,omitempty"`
+	Threshold      float64        `json:"threshold"`
+	Summary        Summary        `json:"summary"`
+	Methods        []MethodResult `json:"methods"`
 }
 
 type Summary struct {
