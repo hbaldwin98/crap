@@ -87,15 +87,16 @@ func TestCompactReportDefaultsToPagedViolations(t *testing.T) {
 		{ID: "first", CRAP: 50, AboveThreshold: true},
 	}
 	report := analysis.Report{
-		SchemaVersion: "2", DiffBase: "main", DiffBaseCommit: "base", DiffHeadCommit: "head", DiffMergeBase: "merge",
+		SchemaVersion: "3", DiffBase: "main", DiffBaseCommit: "base", DiffHeadCommit: "head", DiffMergeBase: "merge",
 		Threshold: 30, Summary: analysis.Summary{Methods: 3, AboveThreshold: 2}, Methods: methods,
+		Diagnostics: []analysis.Diagnostic{{Severity: "warning", Code: "coverage-path-suffix-matched", Path: "work.ts"}},
 	}
 
 	first := compactReport(report, "violations", 1, 0)
 	if len(first.Methods) != 1 || first.Methods[0].ID != "first" || first.Page.TotalMatched != 2 || !first.Page.HasMore || first.Page.NextOffset == nil || *first.Page.NextOffset != 1 {
 		t.Fatalf("unexpected first page: %#v", first)
 	}
-	if first.SchemaVersion != "2" || first.DiffBaseCommit != "base" || first.DiffHeadCommit != "head" || first.DiffMergeBase != "merge" {
+	if first.SchemaVersion != "3" || first.DiffBaseCommit != "base" || first.DiffHeadCommit != "head" || first.DiffMergeBase != "merge" || len(first.Diagnostics) != 1 {
 		t.Fatalf("diff metadata was not preserved: %#v", first)
 	}
 	second := compactReport(report, "violations", 1, 1)

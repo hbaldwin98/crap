@@ -1,14 +1,15 @@
 package analysis
 
-const SchemaVersion = "2"
+const SchemaVersion = "3"
 
 type Options struct {
-	Paths         []string
-	CoveragePath  string
-	DiffBase      string
-	Root          string
-	CRAPThreshold float64
-	IncludeTests  bool
+	Paths          []string
+	CoveragePath   string
+	DiffBase       string
+	Root           string
+	CRAPThreshold  float64
+	IncludeTests   bool
+	StrictCoverage bool
 }
 
 type Report struct {
@@ -22,6 +23,15 @@ type Report struct {
 	Threshold      float64        `json:"threshold"`
 	Summary        Summary        `json:"summary"`
 	Methods        []MethodResult `json:"methods"`
+	Diagnostics    []Diagnostic   `json:"diagnostics,omitempty"`
+}
+
+type Diagnostic struct {
+	Severity   string   `json:"severity"`
+	Code       string   `json:"code"`
+	Message    string   `json:"message"`
+	Path       string   `json:"path,omitempty"`
+	Candidates []string `json:"candidates,omitempty"`
 }
 
 type Summary struct {

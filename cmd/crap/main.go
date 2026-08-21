@@ -24,6 +24,7 @@ type cliOptions struct {
 	threshold       float64
 	failOnThreshold bool
 	includeTests    bool
+	strictCoverage  bool
 	showVersion     bool
 }
 
@@ -64,6 +65,7 @@ func parseOptions(args []string, stderr io.Writer) (cliOptions, bool) {
 	flags.Float64Var(&options.threshold, "threshold", 30, "CRAP score threshold")
 	flags.BoolVar(&options.failOnThreshold, "fail-on-threshold", false, "exit 2 when a callable exceeds the threshold")
 	flags.BoolVar(&options.includeTests, "include-tests", false, "include Go and TypeScript test files")
+	flags.BoolVar(&options.strictCoverage, "strict-coverage", false, "fail when coverage paths are unmatched or ambiguous")
 	flags.BoolVar(&options.showVersion, "version", false, "print version")
 	flags.Usage = func() { writeUsage(stderr, flags) }
 	if err := flags.Parse(args); err != nil {
@@ -102,7 +104,7 @@ func runAnalysis(options cliOptions, stdout, stderr io.Writer) int {
 	defer analyzer.Close()
 	report, err := analyzer.Analyze(analysis.Options{
 		Paths: options.paths, CoveragePath: options.coverage, DiffBase: options.diffBase,
-		Root: root, CRAPThreshold: options.threshold, IncludeTests: options.includeTests,
+		Root: root, CRAPThreshold: options.threshold, IncludeTests: options.includeTests, StrictCoverage: options.strictCoverage,
 	})
 	if err != nil {
 		fmt.Fprintf(stderr, "crap: %v\n", err)
@@ -142,4 +144,7 @@ func writeText(writer io.Writer, report analysis.Report) {
 	}
 	fmt.Fprintf(writer, "\n%d methods in %d files; %d above CRAP %.2f; maximum %.2f\n",
 		report.Summary.Methods, report.Summary.Files, report.Summary.AboveThreshold, report.Threshold, report.Summary.MaximumCRAP)
+	for _, diagnostic := range report.Diagnostics {
+		fmt.Fprintf(writer, "%s: %s: %s\n", diagnostic.Severity, diagnostic.Path, diagnostic.Message)
+	}
 }

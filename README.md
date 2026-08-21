@@ -69,6 +69,7 @@ Options:
 | `--threshold SCORE` | `30` | Mark scores strictly greater than this value as above threshold. |
 | `--fail-on-threshold` | `false` | Exit with code `2` when any returned callable is above threshold. |
 | `--include-tests` | `false` | Include Go `_test.go` and TypeScript `.spec`/`.test` files. |
+| `--strict-coverage` | `false` | Fail when a supplied coverage report has unmatched or ambiguous source paths. |
 | `--version` | | Print the version. |
 
 Put options before paths. Paths are resolved from the current working directory and can be individual files or directories.
@@ -135,7 +136,9 @@ Accepted formats:
 - Cobertura XML, matched to C#, Go, TypeScript, or TSX source by normalized file path
 - Native Go coverprofiles produced by `go test -coverprofile`
 
-Cobertura coverage is the percentage of instrumented lines in a callable that have hits. Go coverprofile coverage is weighted by each block's statement count. A callable missing from a supplied report is scored with 0% coverage and retains `coveragePercent: null` so missing data is not mistaken for measured zero coverage.
+Cobertura coverage is the percentage of instrumented lines owned by a callable that have hits. Callable names and ranges always come from the C#, Go, or TypeScript AST; Cobertura method names are ignored because instrumentation and source-map processing can rewrite them. A nested callable owns its own lines, so its coverage is excluded from its parent. Go coverprofile coverage is weighted by each block's statement count.
+
+Coverage paths are matched by exact normalized path, then by a unique component suffix, then by a unique case-insensitive match. Cobertura `<sources>` entries and both slash styles are supported. Non-exact matches produce deterministic diagnostics. Unmatched or ambiguous files retain `coveragePercent: null` and are conservatively scored as 0% coverage; use `--strict-coverage` in CI to reject those reports instead.
 
 ## Changed Code
 
@@ -186,6 +189,7 @@ The server exposes one tool, `analyze_code`. Its inputs are:
 | `diffBase` | string | none | Return only callables changed from this Git revision. |
 | `crapThreshold` | number | `30` | Mark scores strictly greater than this value as above threshold. |
 | `includeTests` | boolean | `false` | Include Go `_test.go` and TypeScript `.spec`/`.test` files. |
+| `strictCoverage` | boolean | `false` | Fail when supplied coverage paths are unmatched or ambiguous. |
 | `resultMode` | string | `violations` | Return `summary`, `violations`, `highest`, or `all` methods. |
 | `limit` | integer | `20` | Return at most this many methods; maximum `100`. |
 | `offset` | integer | `0` | Skip this many matching methods for stateless pagination. |
@@ -204,7 +208,7 @@ Example tool input with a maximum allowed score of 10:
 }
 ```
 
-Every response includes the full analysis summary and a `page` object. Methods are sorted by descending CRAP score before pagination. `violations` returns only methods above the requested threshold, `highest` and `all` return all methods, and `summary` returns no methods. Use `page.nextOffset` in another call when it is not `null`; each page reruns the same deterministic analysis rather than relying on server state.
+Every response includes the full analysis summary, coverage diagnostics, and a `page` object. Methods are sorted by descending CRAP score before pagination. `violations` returns only methods above the requested threshold, `highest` and `all` return all methods, and `summary` returns no methods. Use `page.nextOffset` in another call when it is not `null`; each page reruns the same deterministic analysis rather than relying on server state.
 
 Check `summary.aboveThreshold` for the violation count, `summary.maximumCrap` for the highest actual score, and each returned method's `aboveThreshold` field. Use the CLI JSON format when one complete unpaged report is required. The MCP server returns findings rather than a process exit code.
 

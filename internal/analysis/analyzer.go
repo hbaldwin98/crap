@@ -172,13 +172,28 @@ func (analyzer *Analyzer) Analyze(options Options) (Report, error) {
 	if options.DiffBase != "" {
 		report.Mode = "changed"
 	}
+	relativeFiles := make([]string, len(files))
+	for index, file := range files {
+		relative, err := filepath.Rel(root, file)
+		if err != nil {
+			return Report{}, fmt.Errorf("make path relative: %w", err)
+		}
+		relativeFiles[index] = normalizePath(relative)
+	}
+	coverageMatches := coverage.matchFiles(relativeFiles)
 
-	for _, file := range files {
-		methods, err := analyzer.analyzeFile(root, file, coverage, changes, options)
+	for index, file := range files {
+		methods, diagnostic, err := analyzer.analyzeFile(file, relativeFiles[index], coverageMatches[index], changes, options)
 		if err != nil {
 			return Report{}, err
 		}
 		report.Methods = append(report.Methods, methods...)
+		if diagnostic != nil {
+			report.Diagnostics = append(report.Diagnostics, *diagnostic)
+			if options.StrictCoverage && (diagnostic.Code == "coverage-path-unmatched" || diagnostic.Code == "coverage-path-ambiguous") {
+				return Report{}, fmt.Errorf("strict coverage: %s: %s", diagnostic.Path, diagnostic.Message)
+			}
+		}
 	}
 	sort.Slice(report.Methods, func(i, j int) bool {
 		if report.Methods[i].File == report.Methods[j].File {
@@ -188,56 +203,84 @@ func (analyzer *Analyzer) Analyze(options Options) (Report, error) {
 	})
 	report.Summary = summarize(report.Methods)
 	report.Summary.Files = len(files)
+	sort.Slice(report.Diagnostics, func(i, j int) bool {
+		if report.Diagnostics[i].Code != report.Diagnostics[j].Code {
+			return report.Diagnostics[i].Code < report.Diagnostics[j].Code
+		}
+		return report.Diagnostics[i].Path < report.Diagnostics[j].Path
+	})
 	return report, nil
 }
 
-func (analyzer *Analyzer) analyzeFile(root, path string, coverage coverageData, changes changedFiles, options Options) ([]MethodResult, error) {
+func (analyzer *Analyzer) analyzeFile(path, relative string, match coverageMatch, changes changedFiles, options Options) ([]MethodResult, *Diagnostic, error) {
 	source, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("read %s: %w", path, err)
+		return nil, nil, fmt.Errorf("read %s: %w", path, err)
 	}
 	language, ok := analyzer.languages[strings.ToLower(filepath.Ext(path))]
 	if !ok {
-		return nil, fmt.Errorf("unsupported source file %s", path)
+		return nil, nil, fmt.Errorf("unsupported source file %s", path)
 	}
 	tree := language.parser.Parse(source, nil)
 	if tree == nil {
-		return nil, fmt.Errorf("parse %s: parser returned no tree", path)
+		return nil, nil, fmt.Errorf("parse %s: parser returned no tree", path)
 	}
 	defer tree.Close()
 	if tree.RootNode().HasError() {
-		return nil, fmt.Errorf("parse %s: source contains syntax errors", path)
+		return nil, nil, fmt.Errorf("parse %s: source contains syntax errors", path)
 	}
 
-	relative, err := filepath.Rel(root, path)
-	if err != nil {
-		return nil, fmt.Errorf("make path relative: %w", err)
-	}
-	relative = normalizePath(relative)
-	fileCoverage := coverage.forFile(relative)
-	results := make([]MethodResult, 0)
-	collectCallables(tree.RootNode(), source, path, relative, fileCoverage, changes, options, language, &results)
-	return results, nil
-}
-
-func collectCallables(node *treesitter.Node, source []byte, sourcePath, file string, coverage []coverageSpan, changes changedFiles, options Options, language languageDefinition, results *[]MethodResult) {
-	if kind, ok := language.callableKinds[node.Kind()]; ok {
-		result := resultForNode(node, source, sourcePath, file, kind, coverage, changes, options.CRAPThreshold, language)
+	callables := make([]callableNode, 0)
+	collectCallableNodes(tree.RootNode(), language, 0, &callables)
+	results := make([]MethodResult, 0, len(callables))
+	for index, callable := range callables {
+		result := resultForNode(callable.node, source, path, relative, callable.kind, match.spans, callableOwnedRanges(callables, index), changes, options.CRAPThreshold, language)
 		if options.DiffBase == "" || result.Changed {
-			*results = append(*results, result)
+			results = append(results, result)
 		}
 	}
+	return results, coverageDiagnostic(relative, match), nil
+}
+
+func coverageDiagnostic(file string, match coverageMatch) *Diagnostic {
+	var diagnostic Diagnostic
+	switch match.kind {
+	case "suffix":
+		diagnostic = Diagnostic{Severity: "warning", Code: "coverage-path-suffix-matched", Message: "coverage path matched by a unique component suffix", Path: file}
+	case "case-folded":
+		diagnostic = Diagnostic{Severity: "warning", Code: "coverage-path-case-folded", Message: "coverage path matched case-insensitively", Path: file}
+	case "unmatched":
+		diagnostic = Diagnostic{Severity: "error", Code: "coverage-path-unmatched", Message: "no coverage entry matched this analyzed source file", Path: file}
+	case "ambiguous":
+		diagnostic = Diagnostic{Severity: "error", Code: "coverage-path-ambiguous", Message: "coverage attribution is ambiguous across report entries or analyzed source files", Path: file, Candidates: append([]string(nil), match.candidates...)}
+	default:
+		return nil
+	}
+	return &diagnostic
+}
+
+type callableNode struct {
+	node  *treesitter.Node
+	kind  string
+	depth int
+}
+
+func collectCallableNodes(node *treesitter.Node, language languageDefinition, depth int, results *[]callableNode) {
+	if kind, ok := language.callableKinds[node.Kind()]; ok {
+		*results = append(*results, callableNode{node: node, kind: kind, depth: depth})
+		depth++
+	}
 	for index := uint(0); index < node.NamedChildCount(); index++ {
-		collectCallables(node.NamedChild(index), source, sourcePath, file, coverage, changes, options, language, results)
+		collectCallableNodes(node.NamedChild(index), language, depth, results)
 	}
 }
 
-func resultForNode(node *treesitter.Node, source []byte, sourcePath, file, kind string, coverage []coverageSpan, changes changedFiles, threshold float64, language languageDefinition) MethodResult {
+func resultForNode(node *treesitter.Node, source []byte, sourcePath, file, kind string, coverage []coverageSpan, owned []lineRange, changes changedFiles, threshold float64, language languageDefinition) MethodResult {
 	start := int(node.StartPosition().Row) + 1
 	end := int(node.EndPosition().Row) + 1
 	name := language.qualifiedName(node, source)
 	complexity := complexity(node, source, language)
-	covered := methodCoverage(coverage, start, end)
+	covered := methodCoverage(coverage, owned)
 	coverageForScore := 0.0
 	if covered != nil {
 		coverageForScore = *covered
@@ -257,6 +300,45 @@ func resultForNode(node *treesitter.Node, source []byte, sourcePath, file, kind 
 		Changed:         changes.intersects(sourcePath, start, end),
 		AboveThreshold:  score > threshold,
 	}
+}
+
+func callableOwnedRanges(callables []callableNode, target int) []lineRange {
+	node := callables[target].node
+	owned := []lineRange{{Start: int(node.StartPosition().Row) + 1, End: int(node.EndPosition().Row) + 1}}
+	excluded := make([]lineRange, 0)
+	for index, candidate := range callables {
+		if index == target || !callablePrecedes(candidate, callables[target]) {
+			continue
+		}
+		excluded = append(excluded, lineRange{Start: int(candidate.node.StartPosition().Row) + 1, End: int(candidate.node.EndPosition().Row) + 1})
+	}
+	for _, excluded := range mergeRanges(excluded) {
+		next := make([]lineRange, 0, len(owned)+1)
+		for _, current := range owned {
+			if excluded.End < current.Start || excluded.Start > current.End {
+				next = append(next, current)
+				continue
+			}
+			if excluded.Start > current.Start {
+				next = append(next, lineRange{Start: current.Start, End: excluded.Start - 1})
+			}
+			if excluded.End < current.End {
+				next = append(next, lineRange{Start: excluded.End + 1, End: current.End})
+			}
+		}
+		owned = next
+	}
+	return owned
+}
+
+func callablePrecedes(candidate, target callableNode) bool {
+	if candidate.depth != target.depth {
+		return candidate.depth > target.depth
+	}
+	if candidate.node.StartByte() != target.node.StartByte() {
+		return candidate.node.StartByte() < target.node.StartByte()
+	}
+	return candidate.node.EndByte() < target.node.EndByte()
 }
 
 func complexity(root *treesitter.Node, source []byte, language languageDefinition) int {
@@ -408,9 +490,10 @@ func typescriptAssignedName(node *treesitter.Node) *treesitter.Node {
 			return parent.ChildByFieldName("key")
 		case "assignment_expression":
 			return parent.ChildByFieldName("left")
-		}
-		if _, nested := typescriptCallableKinds[parent.Kind()]; nested {
-			break
+		case "parenthesized_expression", "as_expression", "satisfies_expression", "type_assertion", "non_null_expression":
+			continue
+		default:
+			return nil
 		}
 	}
 	return nil
