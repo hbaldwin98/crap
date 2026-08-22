@@ -19,6 +19,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          fetch-depth: 0
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
@@ -33,8 +34,33 @@ jobs:
         run: test -z "$(gofmt -l .)"
       - name: Test with coverage
         run: go test -coverpkg=./... -covermode=atomic -coverprofile=coverage.out ./...
-      - name: Enforce CRAP threshold
-        run: go run ./cmd/crap --coverage coverage.out --threshold 30 --fail-on-threshold .
+      - name: Enforce new-regression gate
+        shell: bash
+        run: |
+          base='${{ github.event.pull_request.base.sha || github.event.before }}'
+          if [[ -z "$base" || "$base" =~ ^0+$ ]] || ! git cat-file -e "$base^{commit}"; then
+            if git rev-parse --verify 'HEAD^' >/dev/null 2>&1; then
+              base='HEAD^'
+            else
+              echo 'No parent commit is available; skipping change regression gate.'
+              exit 0
+            fi
+          fi
+          merge_base="$(git merge-base "$base" HEAD)"
+          baseline="$RUNNER_TEMP/crap-baseline"
+          mkdir -p "$baseline"
+          git archive "$merge_base" | tar -x -C "$baseline"
+          (
+            cd "$baseline"
+            go test -coverpkg=./... -covermode=atomic -coverprofile=coverage.out ./...
+          )
+          go run ./cmd/crap compare \
+            --base "$base" \
+            --base-coverage "$baseline/coverage.out" \
+            --coverage coverage.out \
+            --threshold 30 \
+            --fail-on-regression \
+            .
       - name: Run focused race tests
         run: go test -race ./cmd/crap ./cmd/crap-install ./cmd/crap-mutate ./internal/analysis ./internal/clioutput ./internal/installer ./internal/mcpserver ./internal/mutation ./internal/mutationmcp ./internal/rootauth ./internal/sarif
       - name: Vet

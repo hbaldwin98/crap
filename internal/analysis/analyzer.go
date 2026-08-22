@@ -95,6 +95,10 @@ func (analyzer *Analyzer) analyzeContext(ctx context.Context, options Options) (
 	if err != nil {
 		return Report{}, analysisInputs{}, err
 	}
+	inputs.sources = make(map[string][]byte, len(relativeFiles))
+	for index, relative := range relativeFiles {
+		inputs.sources[relative] = fileContents[index]
+	}
 	configureAnalysisReport(&report, inputs.root, options, inputs.coverage, inputs.changes, usedGrammars, analyzer.languages)
 	coverageMatches, err := inputs.coverage.matchFilesContext(ctx, relativeFiles)
 	if err != nil {
@@ -122,6 +126,7 @@ type analysisInputs struct {
 	files     []string
 	coverage  coverageData
 	changes   changedFiles
+	sources   map[string][]byte
 }
 
 func (analyzer *Analyzer) prepareAnalysis(ctx context.Context, options Options) (analysisInputs, error) {

@@ -56,8 +56,8 @@ func TestAnalyzeCodeToolReturnsStructuredReport(t *testing.T) {
 	for _, tool := range tools.Tools {
 		toolNames[tool.Name] = true
 	}
-	if len(tools.Tools) != 4 || !toolNames["analyze_code"] || !toolNames["get_analysis_results"] || !toolNames["analyze_change_scope"] || !toolNames["get_change_scope"] {
-		t.Fatalf("tools = %#v, want analysis and change scope tool pairs", toolNames)
+	if len(tools.Tools) != 6 || !toolNames["analyze_code"] || !toolNames["get_analysis_results"] || !toolNames["analyze_change_scope"] || !toolNames["get_change_scope"] || !toolNames["compare_change_scope"] || !toolNames["get_change_scope_comparison"] {
+		t.Fatalf("tools = %#v, want analysis, scope, and comparison tool pairs", toolNames)
 	}
 	result, err := clientSession.CallTool(ctx, &mcp.CallToolParams{
 		Name: "analyze_code",
@@ -119,9 +119,10 @@ func TestAnalyzeCodeToolReturnsStructuredReport(t *testing.T) {
 }
 
 type fakeAnalyzer struct {
-	calls       *atomic.Int32
-	report      analysis.Report
-	scopeReport analysis.ChangeScopeReport
+	calls            *atomic.Int32
+	report           analysis.Report
+	scopeReport      analysis.ChangeScopeReport
+	comparisonReport analysis.ChangeScopeComparisonReport
 }
 
 func (analyzer *fakeAnalyzer) AnalyzeContext(ctx context.Context, _ analysis.Options) (analysis.Report, error) {
@@ -138,6 +139,14 @@ func (analyzer *fakeAnalyzer) AnalyzeChangeScopeContext(ctx context.Context, _ a
 		return analysis.ChangeScopeReport{}, err
 	}
 	return analyzer.scopeReport, nil
+}
+
+func (analyzer *fakeAnalyzer) CompareChangeScopeContext(ctx context.Context, _ analysis.ComparisonOptions) (analysis.ChangeScopeComparisonReport, error) {
+	analyzer.calls.Add(1)
+	if err := ctx.Err(); err != nil {
+		return analysis.ChangeScopeComparisonReport{}, err
+	}
+	return analyzer.comparisonReport, nil
 }
 
 func (*fakeAnalyzer) Close() {}
@@ -276,6 +285,58 @@ func TestChangeScopeMCPRequiresInputs(t *testing.T) {
 		t.Fatal("missing diff base was accepted")
 	}
 	if _, err := getChangeScope(context.Background(), store, GetChangeScopeInput{}); err == nil {
+		t.Fatal("missing report ID was accepted")
+	}
+}
+
+func TestComparisonSnapshotRunsOnceAndIsImmutable(t *testing.T) {
+	root := t.TempDir()
+	policy, err := rootauth.New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	calls := &atomic.Int32{}
+	report := analysis.ChangeScopeComparisonReport{
+		SchemaVersion: "1", ReportType: "change-scope-comparison",
+		Summary:   analysis.ComparisonSummary{Added: 1, NewRegressions: 1, Complete: true},
+		Callables: []analysis.CallableComparison{{ID: strings.Repeat("a", 64), Status: "added", MatchStrategy: "none", Change: "added", NewRegression: true}},
+	}
+	store := newSnapshotStore()
+	factory := func() (analyzerExecution, error) {
+		return &fakeAnalyzer{calls: calls, comparisonReport: report}, nil
+	}
+	_, first, err := compareChangeScopeWith(context.Background(), nil, CompareChangeScopeInput{Root: root, BaseRevision: "main"}, policy, store, factory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if calls.Load() != 1 || first.ReportID == "" || first.PageSchemaVersion != "1" || first.Report.Summary.NewRegressions != 1 {
+		t.Fatalf("output = %#v, calls = %d", first, calls.Load())
+	}
+	report.Callables[0].ID = "mutated"
+	second, err := getChangeScopeComparison(context.Background(), store, GetChangeScopeComparisonInput{ReportID: first.ReportID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if calls.Load() != 1 || second.Report.Callables[0].ID != strings.Repeat("a", 64) || second.ReportID != first.ReportID {
+		t.Fatalf("retrieved = %#v, calls = %d", second, calls.Load())
+	}
+	if _, err := getChangeScope(context.Background(), store, GetChangeScopeInput{ReportID: first.ReportID}); err == nil {
+		t.Fatal("comparison snapshot was accepted as change scope")
+	}
+}
+
+func TestComparisonMCPRequiresInputs(t *testing.T) {
+	root := t.TempDir()
+	policy, err := rootauth.New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := newSnapshotStore()
+	factory := func() (analyzerExecution, error) { return &fakeAnalyzer{calls: &atomic.Int32{}}, nil }
+	if _, _, err := compareChangeScopeWith(context.Background(), nil, CompareChangeScopeInput{Root: root}, policy, store, factory); err == nil {
+		t.Fatal("missing base revision was accepted")
+	}
+	if _, err := getChangeScopeComparison(context.Background(), store, GetChangeScopeComparisonInput{}); err == nil {
 		t.Fatal("missing report ID was accepted")
 	}
 }

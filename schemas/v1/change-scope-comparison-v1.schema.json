@@ -1,0 +1,130 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "change-scope-comparison-v1.schema.json",
+  "$defs": {
+    "coverage": {
+      "type": "object", "required": ["format"],
+      "properties": {
+        "format": { "enum": ["none", "cobertura", "go-coverprofile"] },
+        "displayedPath": { "type": "string", "minLength": 1 },
+        "sha256": { "$ref": "common.schema.json#/$defs/digest" }
+      },
+      "additionalProperties": false
+    },
+    "discovery": {
+      "type": "object", "required": ["selected", "exclusions"],
+      "properties": {
+        "selected": { "type": "integer", "minimum": 0 },
+        "exclusions": {
+          "type": "array",
+          "items": {
+            "type": "object", "required": ["reason", "count", "examples"],
+            "properties": {
+              "reason": { "enum": ["built-in", "crapignore", "explicit", "generated", "git-mode", "gitignore", "test"] },
+              "count": { "type": "integer", "minimum": 1 },
+              "examples": { "type": "array", "maxItems": 5, "items": { "$ref": "common.schema.json#/$defs/relativePath" } }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "revision": {
+      "type": "object", "required": ["sources", "coverage", "discovery", "methods"],
+      "properties": {
+        "commit": { "type": "string", "minLength": 1 },
+        "sources": { "type": "array", "items": { "allOf": [{ "$ref": "common.schema.json#/$defs/fileFingerprint" }, { "required": ["path"] }] } },
+        "coverage": { "$ref": "#/$defs/coverage" },
+        "discovery": { "$ref": "#/$defs/discovery" },
+        "methods": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
+    "comparedCallable": {
+      "type": "object", "required": ["method", "coverageState", "contentSha256"],
+      "properties": {
+        "method": { "$ref": "common.schema.json#/$defs/method" },
+        "coverageState": { "enum": ["absent", "measured", "uninstrumented", "unmatched", "ambiguous"] },
+        "contentSha256": { "$ref": "common.schema.json#/$defs/digest" }
+      },
+      "additionalProperties": false
+    },
+    "comparison": {
+      "type": "object", "required": ["id", "status", "matchStrategy", "change", "baseline", "current", "delta", "newRegression", "reasons"],
+      "properties": {
+        "id": { "$ref": "common.schema.json#/$defs/digest" },
+        "status": { "enum": ["matched", "added", "removed", "ambiguous"] },
+        "matchStrategy": { "enum": ["id", "declaration", "none"] },
+        "change": { "enum": ["unchanged", "modified", "moved", "moved-modified", "added", "removed", "ambiguous"] },
+        "baseline": { "type": "array", "items": { "$ref": "#/$defs/comparedCallable" } },
+        "current": { "type": "array", "items": { "$ref": "#/$defs/comparedCallable" } },
+        "delta": {
+          "oneOf": [
+            { "type": "null" },
+            {
+              "type": "object", "required": ["complexity", "coveragePercent", "crap", "scoreComparable"],
+              "properties": {
+                "complexity": { "type": "integer" },
+                "coveragePercent": { "type": ["number", "null"] },
+                "crap": { "type": ["number", "null"] },
+                "scoreComparable": { "type": "boolean" }
+              },
+              "additionalProperties": false
+            }
+          ]
+        },
+        "newRegression": { "type": "boolean" },
+        "reasons": { "type": "array", "items": { "enum": ["complexity-increased", "coverage-decreased", "crap-increased", "threshold-crossed", "added-above-threshold"] } }
+      },
+      "additionalProperties": false
+    }
+  },
+  "type": "object",
+  "required": ["schemaVersion", "reportType", "tool", "coordinates", "grammars", "baseRevision", "baseCommit", "headCommit", "mergeBase", "threshold", "configSha256", "policy", "baseline", "current", "summary", "callables", "limitations", "diagnostics"],
+  "properties": {
+    "schemaVersion": { "const": "1" },
+    "reportType": { "const": "change-scope-comparison" },
+    "tool": { "$ref": "common.schema.json#/$defs/tool" },
+    "coordinates": { "$ref": "common.schema.json#/$defs/coordinates" },
+    "grammars": { "type": "array", "items": { "oneOf": [{ "const": {"language": "csharp", "version": "v0.23.5"} }, { "const": {"language": "go", "version": "v0.23.4"} }, { "const": {"language": "typescript", "version": "v0.23.2"} }, { "const": {"language": "tsx", "version": "v0.23.2"} }] } },
+    "baseRevision": { "type": "string", "minLength": 1 },
+    "baseCommit": { "type": "string", "minLength": 1 },
+    "headCommit": { "type": "string", "minLength": 1 },
+    "mergeBase": { "type": "string", "minLength": 1 },
+    "threshold": { "type": "number", "minimum": 0 },
+    "configSha256": { "$ref": "common.schema.json#/$defs/digest" },
+    "policy": {
+      "type": "object", "required": ["deltaDirection", "exactMatch", "moveMatch", "newRegressionPolicy"],
+      "properties": {
+        "deltaDirection": { "const": "current-minus-baseline" },
+        "exactMatch": { "const": "callable-id" },
+        "moveMatch": { "const": "unique-language-kind-name-signature" },
+        "newRegressionPolicy": { "const": "added-above-threshold-or-threshold-crossed-with-comparable-score" }
+      },
+      "additionalProperties": false
+    },
+    "baseline": { "$ref": "#/$defs/revision" },
+    "current": { "$ref": "#/$defs/revision" },
+    "summary": {
+      "type": "object", "required": ["matched", "added", "removed", "ambiguous", "newRegressions", "complete"],
+      "properties": {
+        "matched": { "type": "integer", "minimum": 0 }, "added": { "type": "integer", "minimum": 0 },
+        "removed": { "type": "integer", "minimum": 0 }, "ambiguous": { "type": "integer", "minimum": 0 },
+        "newRegressions": { "type": "integer", "minimum": 0 }, "complete": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    },
+    "callables": { "type": "array", "items": { "$ref": "#/$defs/comparison" } },
+    "limitations": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+    "diagnostics": {
+      "type": "array",
+      "items": {
+        "type": "object", "required": ["revision", "diagnostic"],
+        "properties": { "revision": { "enum": ["baseline", "current"] }, "diagnostic": { "$ref": "common.schema.json#/$defs/diagnostic" } },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

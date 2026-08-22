@@ -25,7 +25,7 @@ func TestRunVersion(t *testing.T) {
 }
 
 func TestRunHelpExitsZero(t *testing.T) {
-	for _, args := range [][]string{{"-h"}, {"--help"}, {"scope", "actual", "--help"}, {"mcp", "--help"}} {
+	for _, args := range [][]string{{"-h"}, {"--help"}, {"scope", "actual", "--help"}, {"compare", "--help"}, {"mcp", "--help"}} {
 		var stdout, stderr bytes.Buffer
 		if code := run(args, &stdout, &stderr); code != 0 {
 			t.Errorf("run(%v) exit code = %d, stderr = %s", args, code, stderr.String())
@@ -33,6 +33,82 @@ func TestRunHelpExitsZero(t *testing.T) {
 		if !strings.Contains(stdout.String(), "Usage:") || stderr.Len() != 0 {
 			t.Errorf("run(%v) stdout = %q, stderr = %q", args, stdout.String(), stderr.String())
 		}
+	}
+}
+
+func TestRunComparisonJSONAndRegressionExit(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "sample.go")
+	if err := os.WriteFile(source, []byte("package sample\n\nfunc Work(v int) int { return v }\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGitCLI(t, root, "init")
+	runGitCLI(t, root, "add", ".")
+	runGitCLI(t, root, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "baseline")
+	current := `package sample
+
+func Work(v int) int {
+	if v > 0 { v++ }
+	if v > 1 { v++ }
+	if v > 2 { v++ }
+	if v > 3 { v++ }
+	if v > 4 { v++ }
+	return v
+}
+`
+	if err := os.WriteFile(source, []byte(current), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	workingDirectory, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(root); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(workingDirectory) })
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"compare", "--base", "HEAD", "--format", "json", "--fail-on-regression", "."}, &stdout, &stderr)
+	if code != 2 {
+		t.Fatalf("exit code = %d, stderr = %s", code, stderr.String())
+	}
+	var report analysis.ChangeScopeComparisonReport
+	if err := json.Unmarshal(stdout.Bytes(), &report); err != nil {
+		t.Fatal(err)
+	}
+	if report.ReportType != "change-scope-comparison" || report.Summary.NewRegressions != 1 || len(report.Callables) != 1 || report.Callables[0].Reasons[len(report.Callables[0].Reasons)-1] != "threshold-crossed" {
+		t.Fatalf("report = %#v", report)
+	}
+}
+
+func TestWriteComparisonTextShowsChangesAndOmitsUnchanged(t *testing.T) {
+	method := func(id, name, file string, crap float64) analysis.ComparedCallable {
+		return analysis.ComparedCallable{Method: analysis.MethodResult{ID: id, Name: name, File: file, StartLine: 3, CRAP: crap}}
+	}
+	base := method(strings.Repeat("a", 64), "sample.Work", "old.go", 10)
+	current := method(strings.Repeat("b", 64), "sample.Work", "new.go", 40)
+	report := analysis.ChangeScopeComparisonReport{
+		Summary: analysis.ComparisonSummary{Matched: 2, Added: 1, Removed: 1, Ambiguous: 1, NewRegressions: 2, Complete: false},
+		Callables: []analysis.CallableComparison{
+			{Status: "matched", Change: "modified", Baseline: []analysis.ComparedCallable{base}, Current: []analysis.ComparedCallable{current}, NewRegression: true},
+			{Status: "matched", Change: "unchanged", Baseline: []analysis.ComparedCallable{base}, Current: []analysis.ComparedCallable{base}},
+			{Status: "added", Change: "added", Current: []analysis.ComparedCallable{current}, NewRegression: true},
+			{Status: "removed", Change: "removed", Baseline: []analysis.ComparedCallable{base}},
+			{Status: "ambiguous", Change: "ambiguous", Baseline: []analysis.ComparedCallable{base}, Current: []analysis.ComparedCallable{current}},
+		},
+	}
+	var output bytes.Buffer
+	if err := writeComparisonText(&output, report); err != nil {
+		t.Fatal(err)
+	}
+	text := output.String()
+	for _, expected := range []string{"2 new regressions", "REGRESSION modified", "REGRESSION added", "REMOVED removed", "AMBIGUOUS ambiguous", "comparison incomplete"} {
+		if !strings.Contains(text, expected) {
+			t.Fatalf("output %q does not contain %q", text, expected)
+		}
+	}
+	if strings.Contains(text, "MATCHED unchanged") {
+		t.Fatalf("unchanged comparison was rendered: %q", text)
 	}
 }
 

@@ -58,6 +58,30 @@ type ChangeScopeOutput struct {
 	Report            analysis.ChangeScopeReport `json:"report"`
 }
 
+type CompareChangeScopeInput struct {
+	Root             string   `json:"root,omitempty" jsonschema:"Working directory used to resolve paths, coverage, and Git revisions. Defaults to the MCP server working directory."`
+	Paths            []string `json:"paths,omitempty" jsonschema:"C#, Go, TypeScript, or TSX files and directories to compare, relative to root. Defaults to the root directory."`
+	CoveragePath     string   `json:"coveragePath,omitempty" jsonschema:"Coverage report generated for current source."`
+	BaseRevision     string   `json:"baseRevision" jsonschema:"Required Git revision whose merge base supplies baseline source blobs."`
+	BaseCoveragePath string   `json:"baseCoveragePath,omitempty" jsonschema:"Coverage report generated for the exact baseline source revision."`
+	CRAPThreshold    *float64 `json:"crapThreshold,omitempty" jsonschema:"Threshold used to classify new regressions. Defaults to 30."`
+	IncludeTests     bool     `json:"includeTests,omitempty" jsonschema:"Include Go _test.go and TypeScript .spec/.test files. Defaults to false."`
+	IncludeGenerated bool     `json:"includeGenerated,omitempty" jsonschema:"Include generated source conventions. Defaults to false."`
+	Exclude          []string `json:"exclude,omitempty" jsonschema:"Root-relative source exclusion patterns using gitignore syntax."`
+	StrictCoverage   bool     `json:"strictCoverage,omitempty" jsonschema:"Fail when either coverage report has unmatched or ambiguous paths."`
+}
+
+type GetChangeScopeComparisonInput struct {
+	ReportID string `json:"reportId" jsonschema:"Comparison report ID returned by compare_change_scope."`
+}
+
+type ChangeScopeComparisonOutput struct {
+	PageSchemaVersion string                               `json:"pageSchemaVersion"`
+	ReportID          string                               `json:"reportId"`
+	ExpiresAt         string                               `json:"expiresAt"`
+	Report            analysis.ChangeScopeComparisonReport `json:"report"`
+}
+
 type AnalyzeOutput struct {
 	PageSchemaVersion string                      `json:"pageSchemaVersion"`
 	ReportType        string                      `json:"reportType"`
@@ -96,6 +120,7 @@ type Page struct {
 type analyzerExecution interface {
 	AnalyzeContext(context.Context, analysis.Options) (analysis.Report, error)
 	AnalyzeChangeScopeContext(context.Context, analysis.Options) (analysis.ChangeScopeReport, error)
+	CompareChangeScopeContext(context.Context, analysis.ComparisonOptions) (analysis.ChangeScopeComparisonReport, error)
 	Close()
 }
 
@@ -111,7 +136,7 @@ func New(version string, policy *rootauth.Policy) *mcp.Server {
 
 func newServer(version string, policy *rootauth.Policy, snapshots *snapshotStore, factory analyzerFactory) *mcp.Server {
 	server := mcp.NewServer(&mcp.Implementation{Name: "crap", Version: version}, &mcp.ServerOptions{
-		Instructions: "Use analyze_code whenever the user asks to run, check, or report CRAP scores or cyclomatic complexity for C#, Go, or TypeScript. Never estimate these scores yourself. Start with the default violations view or resultMode=summary, then use get_analysis_results for later immutable pages. Use analyze_change_scope for Git-reported current-source ranges, intersecting callables, and file containment. Do not present change scope as semantic impact or proof that unlisted code is unaffected; use get_change_scope to retrieve its immutable snapshot.",
+		Instructions: "Use analyze_code whenever the user asks to run, check, or report CRAP scores or cyclomatic complexity for C#, Go, or TypeScript. Never estimate these scores yourself. Start with the default violations view or resultMode=summary, then use get_analysis_results for later immutable pages. Use analyze_change_scope for Git-reported current-source ranges, intersecting callables, and file containment. Use compare_change_scope to read merge-base source directly from Git and report deterministic quality deltas and new regressions. Do not present scope or comparison as semantic impact or proof that unlisted code is unaffected; use retrieval tools for immutable snapshots.",
 	})
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "analyze_code",
@@ -144,7 +169,93 @@ func newServer(version string, policy *rootauth.Policy, snapshots *snapshotStore
 		output, err := getChangeScope(ctx, snapshots, input)
 		return nil, output, err
 	})
+	mcp.AddTool(server, &mcp.Tool{
+		Name: "compare_change_scope", Title: "Compare change scope",
+		Description: "Compare current source with merge-base source read directly from Git. Reports matched, moved, added, removed, and ambiguous callables plus deterministic quality deltas and new regressions.",
+		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true, IdempotentHint: true, OpenWorldHint: boolPointer(false), DestructiveHint: boolPointer(false)},
+	}, func(ctx context.Context, request *mcp.CallToolRequest, input CompareChangeScopeInput) (*mcp.CallToolResult, ChangeScopeComparisonOutput, error) {
+		return compareChangeScopeWith(ctx, request, input, policy, snapshots, factory)
+	})
+	mcp.AddTool(server, &mcp.Tool{
+		Name: "get_change_scope_comparison", Title: "Get change scope comparison",
+		Description: "Read a retained immutable change scope comparison without rereading Git or source files.",
+		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true, IdempotentHint: true, OpenWorldHint: boolPointer(false), DestructiveHint: boolPointer(false)},
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, input GetChangeScopeComparisonInput) (*mcp.CallToolResult, ChangeScopeComparisonOutput, error) {
+		output, err := getChangeScopeComparison(ctx, snapshots, input)
+		return nil, output, err
+	})
 	return server
+}
+
+func compareChangeScopeWith(ctx context.Context, _ *mcp.CallToolRequest, input CompareChangeScopeInput, policy *rootauth.Policy, snapshots *snapshotStore, factory analyzerFactory) (*mcp.CallToolResult, ChangeScopeComparisonOutput, error) {
+	if input.BaseRevision == "" {
+		return nil, ChangeScopeComparisonOutput{}, fmt.Errorf("baseRevision is required")
+	}
+	root, err := analysisRoot(input.Root)
+	if err != nil {
+		return nil, ChangeScopeComparisonOutput{}, err
+	}
+	scope, err := policy.Root(root)
+	if err != nil {
+		return nil, ChangeScopeComparisonOutput{}, err
+	}
+	threshold, err := analysisThreshold(input.CRAPThreshold)
+	if err != nil {
+		return nil, ChangeScopeComparisonOutput{}, err
+	}
+	analyzer, err := factory()
+	if err != nil {
+		return nil, ChangeScopeComparisonOutput{}, err
+	}
+	defer analyzer.Close()
+	report, err := analyzer.CompareChangeScopeContext(ctx, analysis.ComparisonOptions{
+		BaseRevision: input.BaseRevision, BaseCoveragePath: input.BaseCoveragePath,
+		Analysis: analysis.Options{
+			Root: scope.Path(), Paths: input.Paths, CoveragePath: input.CoveragePath, CRAPThreshold: threshold,
+			IncludeTests: input.IncludeTests, IncludeGenerated: input.IncludeGenerated, Exclude: input.Exclude,
+			StrictCoverage: input.StrictCoverage, Authorization: scope,
+		},
+	})
+	if err != nil {
+		return nil, ChangeScopeComparisonOutput{}, err
+	}
+	item, err := snapshots.putChangeScopeComparisonContext(ctx, report)
+	if err != nil {
+		return nil, ChangeScopeComparisonOutput{}, err
+	}
+	return nil, decorateChangeScopeComparison(report, item), nil
+}
+
+func getChangeScopeComparison(ctx context.Context, snapshots *snapshotStore, input GetChangeScopeComparisonInput) (ChangeScopeComparisonOutput, error) {
+	if input.ReportID == "" {
+		return ChangeScopeComparisonOutput{}, fmt.Errorf("reportId is required")
+	}
+	item, err := snapshots.get(input.ReportID)
+	if err != nil {
+		return ChangeScopeComparisonOutput{}, err
+	}
+	select {
+	case snapshots.reads <- struct{}{}:
+		defer func() { <-snapshots.reads }()
+	case <-ctx.Done():
+		return ChangeScopeComparisonOutput{}, ctx.Err()
+	}
+	report, err := snapshots.decodeChangeScopeComparison(item)
+	if err != nil {
+		return ChangeScopeComparisonOutput{}, err
+	}
+	item, err = snapshots.get(input.ReportID)
+	if err != nil {
+		return ChangeScopeComparisonOutput{}, err
+	}
+	if err := ctx.Err(); err != nil {
+		return ChangeScopeComparisonOutput{}, err
+	}
+	return decorateChangeScopeComparison(report, item), nil
+}
+
+func decorateChangeScopeComparison(report analysis.ChangeScopeComparisonReport, item *snapshot) ChangeScopeComparisonOutput {
+	return ChangeScopeComparisonOutput{PageSchemaVersion: "1", ReportID: item.id, ExpiresAt: item.expiresAt.UTC().Format(time.RFC3339), Report: report}
 }
 
 func analyzeChangeScopeWith(ctx context.Context, _ *mcp.CallToolRequest, input AnalyzeChangeScopeInput, policy *rootauth.Policy, snapshots *snapshotStore, factory analyzerFactory) (*mcp.CallToolResult, ChangeScopeOutput, error) {

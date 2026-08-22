@@ -36,6 +36,22 @@ type cliOptions struct {
 	showHelp         bool
 }
 
+type compareCLIOptions struct {
+	paths            []string
+	format           string
+	output           string
+	coverage         string
+	base             string
+	baseCoverage     string
+	threshold        float64
+	failOnRegression bool
+	includeTests     bool
+	includeGenerated bool
+	excludes         stringList
+	strictCoverage   bool
+	showHelp         bool
+}
+
 func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
 }
@@ -46,6 +62,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 	if len(args) > 0 && args[0] == "scope" {
 		return runScope(args[1:], stdout, stderr)
+	}
+	if len(args) > 0 && args[0] == "compare" {
+		return runComparison(args[1:], stdout, stderr)
 	}
 	options, ok := parseOptionsWithHelp(args, stdout, stderr)
 	if !ok {
@@ -86,6 +105,146 @@ func runScope(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	return runScopeAnalysis(options, stdout, stderr)
+}
+
+func runComparison(args []string, stdout, stderr io.Writer) int {
+	options, ok := parseCompareOptions(args, stdout, stderr)
+	if !ok {
+		return 1
+	}
+	if options.showHelp {
+		return 0
+	}
+	if options.base == "" {
+		fmt.Fprintln(stderr, "crap: compare requires --base")
+		return 1
+	}
+	if options.output != "" {
+		if err := clioutput.Validate(options.output); err != nil {
+			fmt.Fprintf(stderr, "crap: invalid output path: %v\n", err)
+			return 1
+		}
+	}
+	root, err := os.Getwd()
+	if err != nil {
+		fmt.Fprintf(stderr, "crap: determine working directory: %v\n", err)
+		return 1
+	}
+	analyzer, err := analysis.NewAnalyzer()
+	if err != nil {
+		fmt.Fprintf(stderr, "crap: %v\n", err)
+		return 1
+	}
+	defer analyzer.Close()
+	report, err := analyzer.CompareChangeScope(analysis.ComparisonOptions{
+		BaseRevision:     options.base,
+		BaseCoveragePath: options.baseCoverage,
+		Analysis: analysis.Options{
+			Root: root, Paths: options.paths, CoveragePath: options.coverage, CRAPThreshold: options.threshold,
+			IncludeTests: options.includeTests, IncludeGenerated: options.includeGenerated, Exclude: options.excludes, StrictCoverage: options.strictCoverage,
+		},
+	})
+	if err != nil {
+		fmt.Fprintf(stderr, "crap: %v\n", err)
+		return 1
+	}
+	if err := clioutput.Write(stdout, options.output, func(writer io.Writer) error {
+		if options.format == "json" {
+			encoder := json.NewEncoder(writer)
+			encoder.SetIndent("", "  ")
+			return encoder.Encode(report)
+		}
+		return writeComparisonText(writer, report)
+	}); err != nil {
+		fmt.Fprintf(stderr, "crap: write report: %v\n", err)
+		return 1
+	}
+	if options.failOnRegression && report.Summary.NewRegressions > 0 {
+		return 2
+	}
+	return 0
+}
+
+func parseCompareOptions(args []string, help, stderr io.Writer) (compareCLIOptions, bool) {
+	flags := flag.NewFlagSet("crap compare", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	options := compareCLIOptions{}
+	flags.StringVar(&options.base, "base", "", "Git revision whose merge base supplies baseline source")
+	flags.StringVar(&options.baseCoverage, "base-coverage", "", "coverage report generated for baseline source")
+	flags.StringVar(&options.coverage, "coverage", "", "coverage report generated for current source")
+	flags.StringVar(&options.format, "format", "text", "output format: text or json")
+	flags.StringVar(&options.output, "output", "", "write report with safe same-directory replacement")
+	flags.Float64Var(&options.threshold, "threshold", 30, "CRAP score threshold")
+	flags.BoolVar(&options.failOnRegression, "fail-on-regression", false, "exit 2 for new threshold regressions")
+	flags.BoolVar(&options.includeTests, "include-tests", false, "include Go and TypeScript test files")
+	flags.BoolVar(&options.includeGenerated, "include-generated", false, "include generated source files")
+	flags.Var(&options.excludes, "exclude", "exclude a root-relative path pattern (repeatable)")
+	flags.BoolVar(&options.strictCoverage, "strict-coverage", false, "fail when either coverage report has unmatched or ambiguous paths")
+	flags.BoolVar(&options.showHelp, "h", false, "print help")
+	flags.BoolVar(&options.showHelp, "help", false, "print help")
+	writeCompareUsage := func(writer io.Writer) {
+		flags.SetOutput(writer)
+		fmt.Fprintln(writer, "Usage: crap compare --base REVISION [options] [path ...]")
+		flags.PrintDefaults()
+		flags.SetOutput(stderr)
+	}
+	flags.Usage = func() { writeCompareUsage(stderr) }
+	if err := flags.Parse(args); err != nil {
+		return compareCLIOptions{}, false
+	}
+	options.paths = flags.Args()
+	if options.showHelp {
+		writeCompareUsage(help)
+		return options, true
+	}
+	if options.format != "text" && options.format != "json" {
+		fmt.Fprintf(stderr, "crap: compare does not support format %q\n", options.format)
+		return compareCLIOptions{}, false
+	}
+	if math.IsNaN(options.threshold) || math.IsInf(options.threshold, 0) || options.threshold < 0 {
+		fmt.Fprintln(stderr, "crap: threshold must be a finite non-negative number")
+		return compareCLIOptions{}, false
+	}
+	return options, true
+}
+
+func writeComparisonText(writer io.Writer, report analysis.ChangeScopeComparisonReport) error {
+	if _, err := fmt.Fprintf(writer, "%d new regressions; %d matched, %d added, %d removed, %d ambiguous\n", report.Summary.NewRegressions, report.Summary.Matched, report.Summary.Added, report.Summary.Removed, report.Summary.Ambiguous); err != nil {
+		return err
+	}
+	for _, comparison := range report.Callables {
+		if comparison.Status == "matched" && comparison.Change == "unchanged" {
+			continue
+		}
+		if comparison.Status == "matched" {
+			baseline, current := comparison.Baseline[0].Method, comparison.Current[0].Method
+			if _, err := fmt.Fprintf(writer, "%s %-16s %s (%s:%d) CRAP %.2f -> %.2f\n", comparisonLabel(comparison), comparison.Change, current.Name, filepath.ToSlash(current.File), current.StartLine, baseline.CRAP, current.CRAP); err != nil {
+				return err
+			}
+			continue
+		}
+		callables := comparison.Current
+		if len(callables) == 0 {
+			callables = comparison.Baseline
+		}
+		for _, callable := range callables {
+			if _, err := fmt.Fprintf(writer, "%s %-16s %s (%s:%d) CRAP %.2f\n", comparisonLabel(comparison), comparison.Status, callable.Method.Name, filepath.ToSlash(callable.Method.File), callable.Method.StartLine, callable.Method.CRAP); err != nil {
+				return err
+			}
+		}
+	}
+	if !report.Summary.Complete {
+		_, err := fmt.Fprintln(writer, "comparison incomplete: ambiguous callable moves require review")
+		return err
+	}
+	return nil
+}
+
+func comparisonLabel(comparison analysis.CallableComparison) string {
+	if comparison.NewRegression {
+		return "REGRESSION"
+	}
+	return strings.ToUpper(comparison.Status)
 }
 
 func runMCP(args []string, stdout, stderr io.Writer) int {
@@ -207,6 +366,7 @@ func parseOptionsWithHelp(args []string, help, stderr io.Writer) (cliOptions, bo
 func writeUsage(writer io.Writer, flags *flag.FlagSet) {
 	fmt.Fprintln(writer, "Usage: crap [options] [path ...]")
 	fmt.Fprintln(writer, "       crap scope actual --diff-base REVISION [options] [path ...]")
+	fmt.Fprintln(writer, "       crap compare --base REVISION [options] [path ...]")
 	fmt.Fprintln(writer, "       crap mcp")
 	fmt.Fprintln(writer, "Deterministically calculate cyclomatic complexity and CRAP scores for C#, Go, and TypeScript callables.")
 	flags.PrintDefaults()

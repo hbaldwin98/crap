@@ -97,6 +97,7 @@ If no path is supplied, `crap` analyzes the current directory. Go `_test.go` and
 ```text
 crap [options] [path ...]
 crap scope actual --diff-base REVISION [options] [path ...]
+crap compare --base REVISION [options] [path ...]
 crap mcp
 ```
 
@@ -237,6 +238,20 @@ Git metadata, changed ranges, and source bytes are captured through separate rea
 
 Scope is structural evidence, not a behavioral-impact claim. Version 1 models only current-tree files, changed callable intersections, and file containment. It does not model deleted source, semantic calls, transitive dependencies, framework wiring, or prove that unlisted code is unaffected. A changed file remains in the report when no callable intersects its changed ranges. `--format` supports `text` and `json`; `--coverage`, discovery options, `--output`, thresholds, and safe output replacement work as they do for analysis.
 
+### Baseline Comparison
+
+Compare the current worktree with source read directly from the Git merge base:
+
+```sh
+crap compare --base origin/main --format json --fail-on-regression .
+```
+
+`crap compare` reads baseline blobs with `git ls-tree` and `git cat-file`; it does not checkout another revision or modify the worktree, index, or branch. Baseline and current source use the same path, exclusion, test, generated-source, threshold, and strict-coverage options. Coverage artifacts are revision-specific: pass current coverage with `--coverage` and coverage generated from the exact merge-base source with `--base-coverage`. One report is never reused for both revisions.
+
+Matching first uses the stable callable ID. Remaining callables match only when the same path-independent language, kind, name, and signature occurs exactly once on each side. Duplicate candidates are reported as `ambiguous`; the tool does not guess. Reports classify matched, moved, modified, added, removed, and ambiguous callables. Numeric deltas are current minus baseline.
+
+`--fail-on-regression` exits `2` only when a current callable is newly above threshold: either it was added above threshold or a matched callable crossed from passing to failing with comparable coverage evidence. Existing above-threshold debt and removed callables do not fail the gate. Ambiguous groups make `summary.complete` false but are not silently classified as regressions. The complete report is written before exit `2`. Comparison supports `text` and `json`; text omits unchanged rows while JSON retains all evidence.
+
 ## MCP Server
 
 Start the stdio server with:
@@ -260,7 +275,7 @@ Example MCP client configuration:
 
 Use an absolute executable path and an explicit `--root` because an MCP client may start the server from a different working directory. On Windows, use paths such as `C:\\tools\\crap.exe` and `C:\\source\\my-project` in JSON. Repeat `--allow-root PATH` to let callers select projects under additional roots. MCP requests cannot read source or coverage files outside the selected authorized root, including through existing symlinks.
 
-The server exposes analysis and change-scope tool pairs. `analyze_code` runs one analysis, stores an immutable serialized snapshot, and returns its first page. Its inputs are:
+The server exposes analysis, change-scope, and comparison tool pairs. `analyze_code` runs one analysis, stores an immutable serialized snapshot, and returns its first page. Its inputs are:
 
 | Input | Type | Default | Purpose |
 | --- | --- | --- | --- |
@@ -298,6 +313,8 @@ Check `summary.aboveThreshold` for the violation count, `summary.maximumCrap` fo
 The analysis CLI emits analysis report schema v6. The current MCP envelope uses `pageSchemaVersion: "4"` and `reportType: "analysis-page"`; historical page schemas v1 through v3 remain published. Canceling an analysis request stops discovery, coverage and Git work, parsing, file dispatch, and initial-page construction as soon as practical. Cancellation and deadline errors observed before snapshot insertion are preserved without returning a partial report. Snapshot insertion is the final commit point; for the same inputs and project state, `analyze_code` retains idempotent analysis semantics even though each successful call receives a new report ID.
 
 `analyze_change_scope` accepts the same root, path, coverage, threshold, and discovery inputs, but requires `diffBase`. It returns the complete `change-scope` v1 report inside a `pageSchemaVersion: "1"` envelope with `reportId` and `expiresAt`. Pass that ID to `get_change_scope` to retrieve the immutable report without rerunning Git or rereading source. Scope snapshots share the analysis server's bounded storage and expiration policy. These tools report structural change evidence only; callers must not present containment as semantic impact.
+
+`compare_change_scope` accepts the same source-selection inputs, requires `baseRevision`, and accepts independent `coveragePath` and `baseCoveragePath` artifacts. It reads merge-base source directly from Git, returns the complete comparison v1 report, and stores an immutable typed snapshot. Pass its ID to `get_change_scope_comparison`; retrieval does not reread Git, source, or coverage. Comparison snapshot IDs cannot be used with analysis or scope retrieval tools.
 
 ## Mutation Testing
 
@@ -457,13 +474,27 @@ Both MCP servers publish initialization instructions that tell capable clients w
 
 ## Report Contracts
 
-JSON outputs carry `reportType`, `schemaVersion`, one shared tool version, coordinate semantics, and deterministic fingerprints. Analysis is v6, mutation is v3, mutation plans are v2, and mutation doctor output has its independent v1 contract. Incompatible changes increment the contract that changed; MCP page versions are independent from their underlying report versions. Analysis v5 added Go function literals and C# lambdas, anonymous methods, and expression-bodied properties/indexers. Analysis v6 adds deterministic source-discovery policy and metadata.
+JSON outputs carry `reportType`, `schemaVersion`, one shared tool version, coordinate semantics, and deterministic fingerprints. Analysis is v6, actual change scope is v1, change-scope comparison is v1, mutation is v3, mutation plans are v2, and mutation doctor output has its independent v1 contract. Incompatible changes increment the contract that changed; MCP envelope versions are independent from their underlying report versions. Analysis v5 added Go function literals and C# lambdas, anonymous methods, and expression-bodied properties/indexers. Analysis v6 adds deterministic source-discovery policy and metadata.
 
 Normalized analysis coordinates are 1-based UTF-8 byte columns with exclusive ends. Normalized mutation coordinates remain engine-native. SARIF is a separate presentation contract and converts or validates both forms as 1-based UTF-16 code units for GitHub. Analysis callable names, signatures, and ranges come from the language AST. Callable IDs hash language, normalized file path, kind, lexical signature, and same-signature occurrence, so inserting blank lines above a callable does not change its ID. Mutation wrapper IDs hash normalized file, range, mutator, and replacement; Stryker's `nativeId` and status do not affect them.
 
 `fingerprints.sources` contains normalized displayed paths and exact source-byte SHA-256 digests. Coverage metadata identifies `none`, `cobertura`, or `go-coverprofile` and can include the original displayed path and exact-byte digest. Fingerprints also cover the native mutation report, resolved Git commits when changed analysis is used, and semantic options. Absolute checkout roots and temporary report paths are not serialized into fingerprints. No timestamp is added to deterministic CLI reports; MCP mutation snapshot expiry remains envelope metadata.
 
 Published JSON Schema 2020-12 files are under [`schemas/v1`](schemas/v1), with matching golden examples under [`testdata/contracts`](testdata/contracts). The schemas reject unknown properties and constrain versions, enums, bounds, nullability, and SHA-256 formats.
+
+## Change Intelligence Roadmap
+
+Change intelligence will grow from deterministic evidence rather than inferred impact claims:
+
+1. Baseline comparison and new-regression gates.
+2. Language-neutral symbol inventory.
+3. File and module dependency graph.
+4. Deterministic self-contained HTML visualization.
+5. Architecture rules and cycle proofs.
+6. Call relationships and affected-test traversal.
+7. Unified change oracle joining scope, quality, tests, and architecture evidence.
+
+Each phase must keep engine facts, unresolved edges, and AI or user judgment distinct.
 
 ## Score Definition
 
@@ -504,6 +535,7 @@ go vet ./...
 go build ./...
 go test -coverpkg=./... -coverprofile=coverage.out ./...
 go run ./cmd/crap --coverage coverage.out --threshold 30 --fail-on-threshold .
+go run ./cmd/crap compare --base HEAD^ --threshold 30 --fail-on-regression .
 ```
 
-CI runs the same coverage-backed CRAP gate and fails when any production callable scores above `30`.
+CI generates coverage for both the current source and a temporary archive of merge-base source, then fails only for new CRAP regressions above `30`.

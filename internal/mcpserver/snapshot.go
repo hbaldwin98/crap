@@ -63,6 +63,10 @@ func (store *snapshotStore) putChangeScopeContext(ctx context.Context, report an
 	return store.putValueContext(ctx, "change-scope", report)
 }
 
+func (store *snapshotStore) putChangeScopeComparisonContext(ctx context.Context, report analysis.ChangeScopeComparisonReport) (*snapshot, error) {
+	return store.putValueContext(ctx, "change-scope-comparison", report)
+}
+
 func (store *snapshotStore) putValueContext(ctx context.Context, kind string, value any) (*snapshot, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -153,6 +157,17 @@ func (store *snapshotStore) decodeChangeScope(item *snapshot) (analysis.ChangeSc
 	var report analysis.ChangeScopeReport
 	if err := json.Unmarshal(item.data, &report); err != nil {
 		return analysis.ChangeScopeReport{}, fmt.Errorf("decode change scope snapshot: %w", err)
+	}
+	return report, nil
+}
+
+func (store *snapshotStore) decodeChangeScopeComparison(item *snapshot) (analysis.ChangeScopeComparisonReport, error) {
+	if item.kind != "change-scope-comparison" {
+		return analysis.ChangeScopeComparisonReport{}, fmt.Errorf("snapshot is not a change scope comparison report")
+	}
+	var report analysis.ChangeScopeComparisonReport
+	if err := json.Unmarshal(item.data, &report); err != nil {
+		return analysis.ChangeScopeComparisonReport{}, fmt.Errorf("decode change scope comparison snapshot: %w", err)
 	}
 	return report, nil
 }

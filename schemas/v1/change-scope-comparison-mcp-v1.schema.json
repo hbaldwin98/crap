@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "change-scope-comparison-mcp-v1.schema.json",
+  "type": "object",
+  "required": ["pageSchemaVersion", "reportId", "expiresAt", "report"],
+  "properties": {
+    "pageSchemaVersion": { "const": "1" },
+    "reportId": { "type": "string", "pattern": "^[0-9a-f]{32}$" },
+    "expiresAt": { "type": "string", "format": "date-time" },
+    "report": { "$ref": "change-scope-comparison-v1.schema.json" }
+  },
+  "additionalProperties": false
+}

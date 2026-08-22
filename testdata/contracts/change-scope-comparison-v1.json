@@ -1,0 +1,25 @@
+{
+  "schemaVersion": "1",
+  "reportType": "change-scope-comparison",
+  "tool": { "name": "crap", "version": "v1.0.0", "modified": false },
+  "coordinates": { "lineBase": 1, "columnBase": 1, "columnEncoding": "utf-8-bytes", "end": "exclusive" },
+  "grammars": [],
+  "baseRevision": "main",
+  "baseCommit": "1111111111111111111111111111111111111111",
+  "headCommit": "2222222222222222222222222222222222222222",
+  "mergeBase": "3333333333333333333333333333333333333333",
+  "threshold": 30,
+  "configSha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "policy": {
+    "deltaDirection": "current-minus-baseline",
+    "exactMatch": "callable-id",
+    "moveMatch": "unique-language-kind-name-signature",
+    "newRegressionPolicy": "added-above-threshold-or-threshold-crossed-with-comparable-score"
+  },
+  "baseline": { "commit": "3333333333333333333333333333333333333333", "sources": [], "coverage": { "format": "none" }, "discovery": { "selected": 0, "exclusions": [] }, "methods": 0 },
+  "current": { "sources": [], "coverage": { "format": "none" }, "discovery": { "selected": 0, "exclusions": [] }, "methods": 0 },
+  "summary": { "matched": 0, "added": 0, "removed": 0, "ambiguous": 0, "newRegressions": 0, "complete": true },
+  "callables": [],
+  "limitations": ["comparison reports structural quality changes, not semantic or behavioral impact"],
+  "diagnostics": []
+}

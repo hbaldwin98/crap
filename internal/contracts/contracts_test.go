@@ -17,19 +17,21 @@ import (
 )
 
 var contractFixtures = map[string]string{
-	"analysis-report-v4.schema.json":   "analysis-report-v4.json",
-	"analysis-report-v5.schema.json":   "analysis-report-v5.json",
-	"analysis-report-v6.schema.json":   "analysis-report-v6.json",
-	"mutation-report-v3.schema.json":   "mutation-report-v3.json",
-	"analysis-mcp-page-v1.schema.json": "analysis-mcp-page-v1.json",
-	"analysis-mcp-page-v2.schema.json": "analysis-mcp-page-v2.json",
-	"analysis-mcp-page-v3.schema.json": "analysis-mcp-page-v3.json",
-	"analysis-mcp-page-v4.schema.json": "analysis-mcp-page-v4.json",
-	"mutation-mcp-page-v2.schema.json": "mutation-mcp-page-v2.json",
-	"mutation-plan-v2.schema.json":     "mutation-plan-v2.json",
-	"mutation-doctor-v1.schema.json":   "mutation-doctor-v1.json",
-	"change-scope-v1.schema.json":      "change-scope-v1.json",
-	"change-scope-mcp-v1.schema.json":  "change-scope-mcp-v1.json",
+	"analysis-report-v4.schema.json":             "analysis-report-v4.json",
+	"analysis-report-v5.schema.json":             "analysis-report-v5.json",
+	"analysis-report-v6.schema.json":             "analysis-report-v6.json",
+	"mutation-report-v3.schema.json":             "mutation-report-v3.json",
+	"analysis-mcp-page-v1.schema.json":           "analysis-mcp-page-v1.json",
+	"analysis-mcp-page-v2.schema.json":           "analysis-mcp-page-v2.json",
+	"analysis-mcp-page-v3.schema.json":           "analysis-mcp-page-v3.json",
+	"analysis-mcp-page-v4.schema.json":           "analysis-mcp-page-v4.json",
+	"mutation-mcp-page-v2.schema.json":           "mutation-mcp-page-v2.json",
+	"mutation-plan-v2.schema.json":               "mutation-plan-v2.json",
+	"mutation-doctor-v1.schema.json":             "mutation-doctor-v1.json",
+	"change-scope-v1.schema.json":                "change-scope-v1.json",
+	"change-scope-mcp-v1.schema.json":            "change-scope-mcp-v1.json",
+	"change-scope-comparison-v1.schema.json":     "change-scope-comparison-v1.json",
+	"change-scope-comparison-mcp-v1.schema.json": "change-scope-comparison-mcp-v1.json",
 }
 
 func TestGoldenContractFixtures(t *testing.T) {
@@ -73,6 +75,17 @@ func TestGeneratedAnalysisAndPlanValidate(t *testing.T) {
 		ReportID:          strings.Repeat("1", 32),
 		ExpiresAt:         time.Date(2026, time.August, 21, 12, 0, 0, 0, time.UTC).Format(time.RFC3339),
 		Report:            scope,
+	})
+	comparison, err := analyzer.CompareChangeScope(analysis.ComparisonOptions{BaseRevision: "HEAD", Analysis: analysis.Options{Root: project, Paths: []string{"work.go"}, CRAPThreshold: 30}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	validateValue(t, filepath.Join(root, "schemas", "v1", "change-scope-comparison-v1.schema.json"), comparison)
+	validateValue(t, filepath.Join(root, "schemas", "v1", "change-scope-comparison-mcp-v1.schema.json"), mcpserver.ChangeScopeComparisonOutput{
+		PageSchemaVersion: "1",
+		ReportID:          strings.Repeat("2", 32),
+		ExpiresAt:         time.Date(2026, time.August, 21, 12, 0, 0, 0, time.UTC).Format(time.RFC3339),
+		Report:            comparison,
 	})
 
 	plan, err := mutation.NewService().Plan(mutation.Options{Root: project, Language: "go", Paths: []string{"."}, MinimumScore: 80, TimeoutSeconds: 60})

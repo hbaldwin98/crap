@@ -16,6 +16,9 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Deterministic actual-change scope reports through CLI and immutable MCP tools,
   with Git ranges, changed callable seeds, containment evidence, and explicit
   limitations.
+- Direct-Git baseline comparison through CLI and immutable MCP tools, including
+  conservative callable move matching, explicit ambiguity, quality deltas, and
+  a CI gate that fails only for new threshold regressions.
 
 ### Changed
 
