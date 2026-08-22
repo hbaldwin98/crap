@@ -71,6 +71,10 @@ func gitChangedLinesContext(ctx context.Context, root, base string, sourceFiles 
 	if err != nil {
 		return changedFiles{}, fmt.Errorf("resolve Git repository root: %w", err)
 	}
+	repositoryRoot, err = filepath.EvalSymlinks(repositoryRoot)
+	if err != nil {
+		return changedFiles{}, fmt.Errorf("resolve Git repository root links: %w", err)
+	}
 	if len(authorization) > 0 && authorization[0] != nil {
 		repositoryRoot, err = authorization[0].Existing(repositoryRoot)
 		if err != nil {
@@ -89,7 +93,14 @@ func gitChangedLinesContext(ctx context.Context, root, base string, sourceFiles 
 	if err != nil {
 		return changedFiles{}, fmt.Errorf("find merge base between %s and %s: %w", baseCommit, headCommit, err)
 	}
-	pathspecs, err := gitSourcePathspecs(repositoryRoot, sourceFiles)
+	canonicalSources := make([]string, len(sourceFiles))
+	for index, sourceFile := range sourceFiles {
+		canonicalSources[index], err = filepath.EvalSymlinks(sourceFile)
+		if err != nil {
+			return changedFiles{}, fmt.Errorf("resolve source %s for Git: %w", sourceFile, err)
+		}
+	}
+	pathspecs, err := gitSourcePathspecs(repositoryRoot, canonicalSources)
 	if err != nil {
 		return changedFiles{}, err
 	}
@@ -373,7 +384,11 @@ func (changes changedFiles) intersects(sourcePath string, start, end int) bool {
 	if changes.RepositoryRoot == "" {
 		return false
 	}
-	relative, err := filepath.Rel(changes.RepositoryRoot, sourcePath)
+	canonical := sourcePath
+	if resolved, err := filepath.EvalSymlinks(sourcePath); err == nil {
+		canonical = resolved
+	}
+	relative, err := filepath.Rel(changes.RepositoryRoot, canonical)
 	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
 		return false
 	}

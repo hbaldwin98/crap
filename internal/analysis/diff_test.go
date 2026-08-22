@@ -162,6 +162,10 @@ func TestGitChangedLinesUsesRepositoryRootAndMergeBase(t *testing.T) {
 	runGit(t, repositoryRoot, "checkout", "feature")
 	headCommit := gitTestValue(t, repositoryRoot, "rev-parse", "HEAD")
 	mergeBase := gitTestValue(t, repositoryRoot, "merge-base", baseCommit, headCommit)
+	canonicalRepositoryRoot, err := filepath.EvalSymlinks(repositoryRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
 	writeDiffTestFile(t, tracked, "package internal\n\nfunc work() {\n\tprintln(2)\n}\n")
 	untracked := filepath.Join(repositoryRoot, "internal", "new file.go")
 	writeDiffTestFile(t, untracked, "package internal\n\nfunc added() {}\n")
@@ -173,7 +177,7 @@ func TestGitChangedLinesUsesRepositoryRootAndMergeBase(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if changes.RepositoryRoot != repositoryRoot || changes.BaseCommit != baseCommit || changes.HeadCommit != headCommit || changes.MergeBase != mergeBase || changes.BaseCommit == changes.MergeBase {
+	if changes.RepositoryRoot != canonicalRepositoryRoot || changes.BaseCommit != baseCommit || changes.HeadCommit != headCommit || changes.MergeBase != mergeBase || changes.BaseCommit == changes.MergeBase {
 		t.Fatalf("unexpected repository metadata: %#v", changes)
 	}
 	if !changes.intersects(tracked, 3, 5) {

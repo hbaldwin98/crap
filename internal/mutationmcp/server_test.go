@@ -145,13 +145,17 @@ func TestRunMutationTestsToolReturnsPagedStructuredReport(t *testing.T) {
 func TestRunMutationDefaultsRootAndAcceptsScoreBoundaries(t *testing.T) {
 	root := t.TempDir()
 	policy := policyFor(t, root)
+	scope, err := policy.Root("")
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, minimum := range []float64{0, 100} {
 		executor := &fakeExecutor{}
 		_, _, err := runMutation(context.Background(), executor, policy, newSnapshotStore(), RunInput{Language: "go", MinimumScore: &minimum})
 		if err != nil {
 			t.Fatalf("minimum %v: %v", minimum, err)
 		}
-		if executor.received.Root != root || executor.received.MinimumScore != minimum {
+		if executor.received.Root != scope.Path() || executor.received.MinimumScore != minimum {
 			t.Fatalf("options = %#v", executor.received)
 		}
 	}

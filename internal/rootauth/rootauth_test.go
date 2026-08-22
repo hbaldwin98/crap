@@ -68,10 +68,14 @@ func TestRootAuthorizesExistingAndFuturePaths(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, err := scope.Existing(filepath.Join("src", "work.ts")); err != nil || got != file {
-		t.Fatalf("Existing = %q, %v", got, err)
+	canonicalFile, err := filepath.EvalSymlinks(file)
+	if err != nil {
+		t.Fatal(err)
 	}
-	want := filepath.Join(root, "reports", "mutation.json")
+	if got, err := scope.Existing(filepath.Join("src", "work.ts")); err != nil || got != canonicalFile {
+		t.Fatalf("Existing = %q, %v, want %q", got, err, canonicalFile)
+	}
+	want := filepath.Join(scope.Path(), "reports", "mutation.json")
 	if got, err := scope.Future(filepath.Join("reports", "mutation.json")); err != nil || got != want {
 		t.Fatalf("Future = %q, %v, want %q", got, err, want)
 	}

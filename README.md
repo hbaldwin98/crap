@@ -1,7 +1,7 @@
 # crap
 
-[![CI](https://github.com/hbaldwin98/C.R.A.P./actions/workflows/ci.yml/badge.svg)](https://github.com/hbaldwin98/C.R.A.P./actions/workflows/ci.yml)
-[![CodeQL](https://github.com/hbaldwin98/C.R.A.P./actions/workflows/codeql.yml/badge.svg)](https://github.com/hbaldwin98/C.R.A.P./actions/workflows/codeql.yml)
+[![CI](https://github.com/hbaldwin98/crap/actions/workflows/ci.yml/badge.svg)](https://github.com/hbaldwin98/crap/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/hbaldwin98/crap/actions/workflows/codeql.yml/badge.svg)](https://github.com/hbaldwin98/crap/actions/workflows/codeql.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 This repository contains two tools:

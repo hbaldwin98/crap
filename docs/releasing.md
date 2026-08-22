@@ -64,7 +64,7 @@ Each archive has an SPDX JSON SBOM. GitHub also stores build-provenance and SBOM
 attestations for each archive. With GitHub CLI installed, verify an archive:
 
 ```sh
-gh attestation verify crap_v0.2.0_linux_amd64.tar.gz --repo hbaldwin98/C.R.A.P.
+gh attestation verify crap_v0.2.0_linux_amd64.tar.gz --repo hbaldwin98/crap
 ```
 
 Inspect the matching `.spdx.json` file directly when auditing dependencies.

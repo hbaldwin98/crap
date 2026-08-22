@@ -47,6 +47,10 @@ func findSourceFilesContext(ctx context.Context, root string, paths, excludes []
 	if err := ctx.Err(); err != nil {
 		return discoveryResult{}, err
 	}
+	root, err := canonicalAnalysisRoot(root, authorization)
+	if err != nil {
+		return discoveryResult{}, err
+	}
 	if len(paths) == 0 {
 		paths = []string{"."}
 	}
@@ -81,6 +85,21 @@ func findSourceFilesContext(ctx context.Context, root string, paths, excludes []
 	}
 	sort.Strings(collector.result.files)
 	return collector.result, nil
+}
+
+func canonicalAnalysisRoot(root string, authorization *rootauth.Root) (string, error) {
+	if authorization != nil {
+		return authorization.Path(), nil
+	}
+	absolute, err := filepath.Abs(root)
+	if err != nil {
+		return "", fmt.Errorf("resolve root: %w", err)
+	}
+	canonical, err := filepath.EvalSymlinks(absolute)
+	if err != nil {
+		return "", fmt.Errorf("resolve root links: %w", err)
+	}
+	return canonical, nil
 }
 
 func readIgnoreFile(path string, domain []string, authorization *rootauth.Root) ([]gitignore.Pattern, error) {

@@ -123,17 +123,9 @@ func (analyzer *Analyzer) prepareAnalysis(ctx context.Context, options Options) 
 	if err := ctx.Err(); err != nil {
 		return analysisInputs{}, err
 	}
-	root, err := filepath.Abs(options.Root)
+	root, err := canonicalAnalysisRoot(options.Root, options.Authorization)
 	if err != nil {
-		return analysisInputs{}, fmt.Errorf("resolve root: %w", err)
-	}
-	if options.Authorization != nil {
-		root = options.Authorization.Path()
-	} else {
-		root, err = filepath.EvalSymlinks(root)
-		if err != nil {
-			return analysisInputs{}, fmt.Errorf("resolve root links: %w", err)
-		}
+		return analysisInputs{}, err
 	}
 	discovery, err := findSourceFilesContext(ctx, root, options.Paths, options.Exclude, options.IncludeTests, options.IncludeGenerated, options.Authorization)
 	if err != nil {
