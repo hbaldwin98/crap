@@ -1,5 +1,9 @@
 # crap
 
+[![CI](https://github.com/hbaldwin98/C.R.A.P./actions/workflows/ci.yml/badge.svg)](https://github.com/hbaldwin98/C.R.A.P./actions/workflows/ci.yml)
+[![CodeQL](https://github.com/hbaldwin98/C.R.A.P./actions/workflows/codeql.yml/badge.svg)](https://github.com/hbaldwin98/C.R.A.P./actions/workflows/codeql.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 This repository contains two tools:
 
 - `crap` deterministically calculates cyclomatic complexity and CRAP scores for C#, Go, TypeScript, and TSX callables.
@@ -7,11 +11,13 @@ This repository contains two tools:
 
 Both tools can run from the command line or as separate MCP stdio servers.
 
+[Changelog](CHANGELOG.md) | [Contributing](CONTRIBUTING.md) | [Security](SECURITY.md) | [Support](SUPPORT.md) | [Releasing](docs/releasing.md)
+
 The tools parse native reports or source and calculate every score. An AI caller can choose paths, coverage, a Git diff, and score thresholds, but it does not derive or reinterpret results.
 
 ## Requirements
 
-- Go 1.23 or newer
+- Go 1.25 or newer
 - A C compiler available to Go, required by Tree-sitter's CGO bindings
 
 On Windows, install a GCC or Clang toolchain and ensure its compiler is on `PATH`. On macOS, install the Xcode command-line tools. Most Linux development environments provide GCC through their package manager.
