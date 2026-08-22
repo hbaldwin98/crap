@@ -71,6 +71,32 @@ func TestWritePreservesDestinationOnRenderFailure(t *testing.T) {
 	}
 }
 
+func TestWriteCheckedPreservesConcurrentDestinationChange(t *testing.T) {
+	destination := filepath.Join(t.TempDir(), "report.json")
+	if err := os.WriteFile(destination, []byte("old"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	err := WriteChecked(io.Discard, destination, func(writer io.Writer) error {
+		_, err := io.WriteString(writer, "replacement")
+		return err
+	}, func() error {
+		if err := os.WriteFile(destination, []byte("concurrent"), 0o600); err != nil {
+			return err
+		}
+		return errors.New("destination changed")
+	})
+	if err == nil || !strings.Contains(err.Error(), "destination changed") {
+		t.Fatalf("WriteChecked error = %v", err)
+	}
+	data, readErr := os.ReadFile(destination)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if string(data) != "concurrent" {
+		t.Fatalf("destination = %q", data)
+	}
+}
+
 func TestValidateRejectsDirectoriesAndMissingParents(t *testing.T) {
 	directory := t.TempDir()
 	for _, path := range []string{directory, filepath.Join(directory, "missing", "report.json")} {

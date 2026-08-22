@@ -30,6 +30,12 @@ func Validate(path string) error {
 }
 
 func Write(stdout io.Writer, path string, render func(io.Writer) error) error {
+	return WriteChecked(stdout, path, render, nil)
+}
+
+// WriteChecked renders a replacement and runs beforeReplace immediately before
+// committing it. Callers can use the hook to detect concurrent destination changes.
+func WriteChecked(stdout io.Writer, path string, render func(io.Writer) error, beforeReplace func() error) error {
 	if path == "" {
 		return render(stdout)
 	}
@@ -69,6 +75,11 @@ func Write(stdout io.Writer, path string, render func(io.Writer) error) error {
 	}
 	if _, _, err := destinationMode(clean); err != nil {
 		return err
+	}
+	if beforeReplace != nil {
+		if err := beforeReplace(); err != nil {
+			return fmt.Errorf("validate destination before replacement: %w", err)
+		}
 	}
 	replaced, err := replaceFile(temporaryPath, clean)
 	if replaced {

@@ -24,7 +24,35 @@ On Windows, install a GCC or Clang toolchain and ensure its compiler is on `PATH
 
 ## Quick Start
 
-Build the executable from the repository root:
+Install both binaries and configure every detected supported MCP client with one command:
+
+```sh
+go run github.com/hbaldwin98/crap/cmd/crap-install@latest
+```
+
+The installer requires Go 1.25 or newer and a C compiler available to Go for Tree-sitter's CGO bindings. It installs `crap` and `crap-mutate` into `GOBIN`, or the first `GOPATH` entry's `bin` directory when `GOBIN` is empty. MCP configurations use absolute executable paths, so that directory does not need to be on the MCP client's `PATH`.
+
+By default, the installer configures Claude Code and OpenCode when their executables are detected. It always writes a client-neutral MCP reference to `~/.config/crap/mcp.json` and prints that path, including when no supported client is detected. Re-running the command updates the same binaries and managed config entries.
+
+Select clients explicitly with repeatable or comma-separated `--client` flags:
+
+```sh
+go run github.com/hbaldwin98/crap/cmd/crap-install@latest --client claude,opencode
+go run github.com/hbaldwin98/crap/cmd/crap-install@latest --client generic
+go run github.com/hbaldwin98/crap/cmd/crap-install@latest --client claude --client opencode --dry-run
+```
+
+Supported names are `claude`, `opencode`, and `generic`. Explicit `claude` selection requires the `claude` CLI. `--dry-run` prints commands and config paths without installing or writing files. `--version VERSION` installs both commands from the same validated module version and defaults to `latest`.
+
+OpenCode honors `OPENCODE_CONFIG`, `OPENCODE_CONFIG_DIR`, and `XDG_CONFIG_HOME`. `OPENCODE_CONFIG` names one exact file. Without that override, the installer updates both `opencode.json` and `opencode.jsonc` when both exist because OpenCode loads both in that order. If neither exists, it creates `~/.config/opencode/opencode.json`. Existing unrelated settings, MCP servers, and JSONC comments are preserved. The two managed server definitions are replaced, including comments inside those definitions.
+
+The generic config receives the same targeted update: unrelated top-level properties, MCP servers, and JSONC comments are preserved, while comments inside the two managed definitions are replaced. The installer rejects OpenCode and generic destination symlinks before installing anything. Safe replacement preserves ordinary existing file mode bits, but not ownership, ACLs, extended attributes, or other filesystem metadata. Newly created config files use mode `0600` where the operating system supports POSIX modes.
+
+Claude Code is configured only through `claude mcp add`. If a user-scoped `crap` or `crap-mutate` server already exists, the installer leaves it unchanged rather than removing it. Because install paths are stable, this is normally the desired idempotent result. If an existing definition points elsewhere, remove it manually with `claude mcp remove --scope user NAME`, then rerun the installer.
+
+Before installation, the command parses and renders every config target and checks `go env GOOS` and `go env GOARCH` against the running installer. This catches malformed configs, unsafe destinations, and persistent `GOENV` cross-compilation settings before `go install`. Immediately before writing a prepared config, the installer also verifies that the file is still byte-for-byte identical to its preflight state, or is still absent if it did not exist. Concurrent changes are preserved and reported with instructions to rerun. A transaction cannot span Go installation, filesystem writes, and external client CLIs. If a later step fails, rerun the command after correcting the error; completed earlier steps are idempotent and are printed as they finish.
+
+To build manually instead, run these commands from the repository root:
 
 ```sh
 go build -o crap ./cmd/crap

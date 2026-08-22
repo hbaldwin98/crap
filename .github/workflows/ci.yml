@@ -32,7 +32,7 @@ jobs:
       - name: Enforce CRAP threshold
         run: go run ./cmd/crap --coverage coverage.out --threshold 30 --fail-on-threshold .
       - name: Run focused race tests
-        run: go test -race ./cmd/crap ./cmd/crap-mutate ./internal/analysis ./internal/clioutput ./internal/mcpserver ./internal/mutation ./internal/mutationmcp ./internal/rootauth ./internal/sarif
+        run: go test -race ./cmd/crap ./cmd/crap-install ./cmd/crap-mutate ./internal/analysis ./internal/clioutput ./internal/installer ./internal/mcpserver ./internal/mutation ./internal/mutationmcp ./internal/rootauth ./internal/sarif
       - name: Vet
         run: go vet ./...
       - name: Build
