@@ -10,3 +10,23 @@ func TestFingerprintPreservesFieldBoundaries(t *testing.T) {
 		t.Fatalf("SHA256 = %s", got)
 	}
 }
+
+func TestSortFilesOrdersByPathThenDigest(t *testing.T) {
+	files := []FileFingerprint{
+		{Path: "z.go", SHA256: "1"},
+		{Path: "a.go", SHA256: "2"},
+		{Path: "a.go", SHA256: "1"},
+	}
+
+	SortFiles(files)
+	want := []FileFingerprint{
+		{Path: "a.go", SHA256: "1"},
+		{Path: "a.go", SHA256: "2"},
+		{Path: "z.go", SHA256: "1"},
+	}
+	for index := range want {
+		if files[index] != want[index] {
+			t.Fatalf("files[%d] = %#v, want %#v", index, files[index], want[index])
+		}
+	}
+}

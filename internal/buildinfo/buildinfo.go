@@ -8,14 +8,15 @@ import (
 )
 
 var (
-	Version  = "0.2.0"
-	Revision string
-	Modified string
+	Version       = "0.2.0"
+	Revision      string
+	Modified      string
+	readBuildInfo = debug.ReadBuildInfo
 )
 
 func Tool(name string) reportcontract.ToolIdentity {
 	version, revision, modified := CurrentVersion(), Revision, Modified == "true"
-	if info, ok := debug.ReadBuildInfo(); ok {
+	if info, ok := readBuildInfo(); ok {
 		for _, setting := range info.Settings {
 			switch setting.Key {
 			case "vcs.revision":
@@ -33,7 +34,7 @@ func Tool(name string) reportcontract.ToolIdentity {
 }
 
 func CurrentVersion() string {
-	if info, ok := debug.ReadBuildInfo(); ok && Version == "0.2.0" && info.Main.Version != "" && info.Main.Version != "(devel)" {
+	if info, ok := readBuildInfo(); ok && Version == "0.2.0" && info.Main.Version != "" && info.Main.Version != "(devel)" {
 		return info.Main.Version
 	}
 	return Version

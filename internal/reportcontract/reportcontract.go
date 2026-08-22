@@ -6,7 +6,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"sort"
+	"slices"
+	"strings"
 )
 
 type ToolIdentity struct {
@@ -76,10 +77,10 @@ func JSONFingerprint(value any) string {
 }
 
 func SortFiles(files []FileFingerprint) {
-	sort.Slice(files, func(i, j int) bool {
-		if files[i].Path != files[j].Path {
-			return files[i].Path < files[j].Path
+	slices.SortFunc(files, func(left, right FileFingerprint) int {
+		if order := strings.Compare(left.Path, right.Path); order != 0 {
+			return order
 		}
-		return files[i].SHA256 < files[j].SHA256
+		return strings.Compare(left.SHA256, right.SHA256)
 	})
 }
