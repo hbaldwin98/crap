@@ -10,6 +10,7 @@ import (
 
 	"github.com/hbaldwin98/crap/internal/analysis"
 	"github.com/hbaldwin98/crap/internal/buildinfo"
+	"github.com/hbaldwin98/crap/internal/sarif"
 )
 
 func TestRunVersion(t *testing.T) {
@@ -19,6 +20,34 @@ func TestRunVersion(t *testing.T) {
 	}
 	if stdout.String() != buildinfo.CurrentVersion()+"\n" {
 		t.Fatalf("version output = %q", stdout.String())
+	}
+}
+
+func TestRunHelpExitsZero(t *testing.T) {
+	for _, args := range [][]string{{"-h"}, {"--help"}, {"mcp", "--help"}} {
+		var stdout, stderr bytes.Buffer
+		if code := run(args, &stdout, &stderr); code != 0 {
+			t.Errorf("run(%v) exit code = %d, stderr = %s", args, code, stderr.String())
+		}
+		if !strings.Contains(stdout.String(), "Usage:") || stderr.Len() != 0 {
+			t.Errorf("run(%v) stdout = %q, stderr = %q", args, stdout.String(), stderr.String())
+		}
+	}
+}
+
+func TestRunVersionTakesPrecedenceOverSemanticValidation(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"--version", "--format", "yaml"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("exit code = %d, stderr = %s", code, stderr.String())
+	}
+}
+
+func TestRunRejectsTrailingMCPArguments(t *testing.T) {
+	for _, args := range [][]string{{"mcp", "unexpected"}, {"mcp", "--help", "unexpected"}} {
+		var stdout, stderr bytes.Buffer
+		if code := run(args, &stdout, &stderr); code != 1 {
+			t.Fatalf("run(%v) exit code = %d, stderr = %s", args, code, stderr.String())
+		}
 	}
 }
 
@@ -58,16 +87,126 @@ func TestRunJSONAndThreshold(t *testing.T) {
 	}
 }
 
+func TestRunWritesOutputWithoutReportOnStdout(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "sample.go"), []byte("package sample\nfunc Work() {}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	workingDirectory, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(root); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(workingDirectory) })
+
+	var stdout, stderr bytes.Buffer
+	destination := filepath.Join(root, "report.json")
+	if code := run([]string{"--format", "json", "--output", destination, "."}, &stdout, &stderr); code != 0 {
+		t.Fatalf("exit code = %d, stderr = %s", code, stderr.String())
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout = %q", stdout.String())
+	}
+	data, err := os.ReadFile(destination)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var report analysis.Report
+	if err := json.Unmarshal(data, &report); err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Methods) != 1 {
+		t.Fatalf("methods = %d", len(report.Methods))
+	}
+}
+
+func TestAnalysisSARIFIsDeterministicAndContainsViolations(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "src"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "src", "work.go"), []byte("é😀work()\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	coverage := 75.0
+	report := analysis.Report{Threshold: 10, Methods: []analysis.MethodResult{
+		{ID: "ignored", File: "src/ok.go", Name: "ok", StartLine: 1, StartColumn: 1, EndLine: 1, EndColumn: 10},
+		{ID: "method-id", File: `src\work.go`, Name: "work", StartLine: 1, StartColumn: 3, EndLine: 1, EndColumn: 7, Complexity: 5, CoveragePercent: &coverage, CRAP: 12.5, AboveThreshold: true},
+	}}
+	var first, second bytes.Buffer
+	if err := writeReport(&first, report, "sarif", root); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeReport(&second, report, "sarif", root); err != nil {
+		t.Fatal(err)
+	}
+	if first.String() != second.String() {
+		t.Fatal("SARIF output is not deterministic")
+	}
+	var document sarif.Log
+	if err := json.Unmarshal(first.Bytes(), &document); err != nil {
+		t.Fatal(err)
+	}
+	if document.Version != "2.1.0" || len(document.Runs) != 1 || len(document.Runs[0].Results) != 1 {
+		t.Fatalf("unexpected SARIF shape: %#v", document)
+	}
+	result := document.Runs[0].Results[0]
+	region := result.Locations[0].PhysicalLocation.Region
+	if result.RuleID != "CRAP001" || result.Locations[0].PhysicalLocation.ArtifactLocation.URI != "src/work.go" || region.StartLine != 1 || region.StartColumn != 2 || region.EndLine != 1 || region.EndColumn != 4 {
+		t.Fatalf("unexpected result: %#v", result)
+	}
+	if result.PartialFingerprints["crap.methodId/v1"] != "method-id" || result.PartialFingerprints["primaryLocationLineHash"] != "method-id" || document.Runs[0].Tool.Driver.Version != buildinfo.CurrentVersion() {
+		t.Fatalf("unexpected identity: %#v", result.PartialFingerprints)
+	}
+	if document.Runs[0].ColumnKind != "utf16CodeUnits" || document.Runs[0].Tool.Driver.Rules[0].FullDescription.Text == "" || document.Runs[0].Tool.Driver.Rules[0].Help.Text == "" {
+		t.Fatalf("incomplete GitHub profile: %#v", document.Runs[0])
+	}
+	typed, err := analysisSARIF(report, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	properties, ok := typed.Runs[0].Results[0].Properties.(analysisSARIFProperties)
+	if !ok || properties.Score != 12.5 || properties.Complexity != 5 || properties.Coverage == nil || *properties.Coverage != 75 || properties.Threshold != 10 {
+		t.Fatalf("properties = %#v", properties)
+	}
+}
+
+func TestAnalysisSARIFHasEmptyResultsWithoutViolations(t *testing.T) {
+	document, err := analysisSARIF(analysis.Report{Methods: []analysis.MethodResult{{ID: "ok"}}}, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(document.Runs) != 1 || document.Runs[0].Results == nil || len(document.Runs[0].Results) != 0 {
+		t.Fatalf("results = %#v", document.Runs)
+	}
+}
+
+func TestAnalysisSARIFRejectsMoreThanGitHubResultLimit(t *testing.T) {
+	methods := make([]analysis.MethodResult, sarif.MaxResults+1)
+	for index := range methods {
+		methods[index].AboveThreshold = true
+	}
+	if _, err := analysisSARIF(analysis.Report{Methods: methods}, t.TempDir()); err == nil {
+		t.Fatal("SARIF result overflow was accepted")
+	}
+}
+
 func TestRunRejectsInvalidOptions(t *testing.T) {
 	tests := [][]string{
 		{"--format", "yaml"},
 		{"--threshold", "-1"},
+		{"--threshold", "NaN"},
 		{"--not-a-flag"},
 	}
 	for _, args := range tests {
 		var stdout, stderr bytes.Buffer
 		if code := run(args, &stdout, &stderr); code != 1 {
 			t.Errorf("run(%v) exit code = %d, want 1", args, code)
+		}
+		if stdout.Len() != 0 || stderr.Len() == 0 {
+			t.Errorf("run(%v) stdout = %q, stderr = %q", args, stdout.String(), stderr.String())
 		}
 	}
 }
@@ -77,6 +216,18 @@ func TestParseOptionsAcceptsStrictCoverage(t *testing.T) {
 	options, ok := parseOptions([]string{"--strict-coverage", "--include-generated", "--exclude", "dist/**", "--exclude", "vendor/**", "src"}, &stderr)
 	if !ok || !options.strictCoverage || !options.includeGenerated || len(options.excludes) != 2 || len(options.paths) != 1 || options.paths[0] != "src" {
 		t.Fatalf("options = %#v, ok = %v, stderr = %s", options, ok, stderr.String())
+	}
+}
+
+func TestParseOptionsStopsAtFirstPathAndHonorsDoubleDash(t *testing.T) {
+	var stderr bytes.Buffer
+	options, ok := parseOptions([]string{"src", "--threshold", "1"}, &stderr)
+	if !ok || options.threshold != 30 || len(options.paths) != 3 || options.paths[1] != "--threshold" {
+		t.Fatalf("options = %#v, ok = %v", options, ok)
+	}
+	options, ok = parseOptions([]string{"--threshold", "1", "--", "-source"}, &stderr)
+	if !ok || options.threshold != 1 || len(options.paths) != 1 || options.paths[0] != "-source" {
+		t.Fatalf("double-dash options = %#v, ok = %v", options, ok)
 	}
 }
 

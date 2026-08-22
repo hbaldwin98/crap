@@ -12,6 +12,7 @@ require (
 	github.com/tree-sitter/tree-sitter-c-sharp v0.23.5
 	github.com/tree-sitter/tree-sitter-go v0.23.4
 	github.com/tree-sitter/tree-sitter-typescript v0.23.2
+	golang.org/x/sys v0.32.0
 )
 
 require (

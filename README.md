@@ -63,7 +63,8 @@ Options:
 
 | Option | Default | Purpose |
 | --- | --- | --- |
-| `--format text\|json` | `text` | Select human-readable or versioned JSON output. |
+| `--format text\|json\|sarif` | `text` | Select human-readable, versioned JSON, or SARIF 2.1.0 output. |
+| `--output PATH` | stdout | Write the report using safe same-directory replacement instead of stdout. |
 | `--coverage PATH` | none | Read Cobertura XML or a native Go coverprofile. |
 | `--diff-base REVISION` | none | Return only callables touching lines changed from a Git revision. |
 | `--threshold SCORE` | `30` | Mark scores strictly greater than this value as above threshold. |
@@ -73,8 +74,11 @@ Options:
 | `--exclude PATTERN` | none | Exclude a root-relative gitignore-style pattern; repeat as needed. |
 | `--strict-coverage` | `false` | Fail when a supplied coverage report has unmatched or ambiguous source paths. |
 | `--version` | | Print the version. |
+| `-h`, `--help` | | Print help and exit successfully. |
 
-Put options before paths. Paths are resolved from the current working directory and can be individual files or directories.
+The standard Go flag rules apply: options must precede the first path, and an unknown option in that position is an error. Parsing stops at the first path, so later option-looking values are paths. Use `--` to end option parsing explicitly, especially before a path that starts with `-`. Paths are resolved from the current working directory and can be individual files or directories.
+
+`--output` creates a temporary file beside the destination and replaces the destination only after the complete report has been rendered, synced, and closed. Existing POSIX permission bits are copied where supported; ownership, ACLs, and other filesystem metadata are not preserved. Destination symlinks, including dangling symlinks, are rejected. Unix uses same-directory rename followed by directory sync; Windows uses `MoveFileEx` with replace-existing and write-through flags. A render, temporary-file sync, or close failure leaves an existing destination unchanged. Filesystem-specific replacement guarantees still apply. When `--output` is set, stdout remains empty; diagnostics still go to stderr.
 
 Analyze selected paths with a maximum allowed score of 20:
 
@@ -97,6 +101,20 @@ Exit codes:
 | `0` | Analysis succeeded and no requested threshold failure occurred. |
 | `1` | Arguments, source parsing, coverage, Git, or output failed. |
 | `2` | Analysis succeeded, but at least one score exceeded the threshold while `--fail-on-threshold` was set. |
+
+### SARIF and GitHub Code Scanning
+
+`--format sarif` emits deterministic SARIF 2.1.0 with one `CRAP001` result per callable above the threshold. GitHub locations use root-relative escaped slash URIs and 1-based UTF-16 code-unit columns converted from the analysis report's UTF-8 byte columns. Every result has an explicit start and exclusive end. Result properties contain the CRAP score, complexity, coverage, and threshold. `partialFingerprints.primaryLocationLineHash` and a tool-specific fingerprint contain the stable callable ID so same-line callables remain distinct.
+
+SARIF rendering validates each location against the current canonical root-relative source file and fails rather than emitting stale or invalid coordinates. GitHub accepts at most 25,000 results per upload; the command returns an output error instead of truncating when that limit would be exceeded.
+
+Generate a file for GitHub code scanning with:
+
+```sh
+crap --format sarif --output crap.sarif --threshold 20 .
+```
+
+Upload `crap.sarif` with GitHub's `github/codeql-action/upload-sarif` action. SARIF is the supported GitHub integration; the CLI does not emit a separate annotation format.
 
 ## Coverage
 
@@ -265,7 +283,8 @@ Options:
 | Option | Default | Purpose |
 | --- | --- | --- |
 | `--language NAME` | required | Select `csharp`, `go`, or `typescript`. |
-| `--format text\|json` | `text` | Select findings-oriented text or versioned JSON. |
+| `--format text\|json\|sarif` | `text` | Select findings-oriented text, versioned JSON, or SARIF 2.1.0. |
+| `--output PATH` | stdout | Write the report using safe same-directory replacement instead of stdout. |
 | `--minimum-score SCORE` | `80` | Set the accepted score from 0 through 100. |
 | `--fail-on-threshold` | `false` | Exit with code `2` when the score is unavailable or below the minimum. |
 | `--timeout DURATION` | `30m` | Stop the engine after a Go duration such as `10m` or `1h`. |
@@ -273,8 +292,11 @@ Options:
 | `--report-path PATH` | StrykerJS default | Read a custom StrykerJS JSON reporter path. |
 | `--dry-run` | `false` | Validate inputs and print the exact native command plan without executing it. |
 | `--version` | | Print the wrapper version. |
+| `-h`, `--help` | | Print help and exit successfully. |
 
-Run from the directory where the native engine normally runs. Stryker.NET usually runs from the C# test project, Gremlins from the Go module root, and StrykerJS from the directory containing its configuration.
+Options must precede the first path. Parsing stops at that path, so later option-looking values are paths; use `--` to end option parsing explicitly or before a path starting with `-`. Run from the directory where the native engine normally runs. Stryker.NET usually runs from the C# test project, Gremlins from the Go module root, and StrykerJS from the directory containing its configuration.
+
+For completed mutation runs, `--format sarif` emits deterministic SARIF 2.1.0 containing actionable survived (`MUT001`) and uncovered (`MUT002`) mutants. GitHub locations are 1-based UTF-16 code units with explicit starts and ends. StrykerJS and Stryker.NET ranges are treated as native one-based UTF-16 coordinates and validated against source; zero-length native ranges are highlighted as one source character. Gremlins point columns are converted from Go byte columns and receive a one-character SARIF-only range; normalized mutation reports and IDs remain unchanged. Sources must be existing regular root-relative files and cannot traverse symlinks. `partialFingerprints.primaryLocationLineHash` and a tool-specific fingerprint contain the stable normalized mutant ID. Engine, status, and minimum-score properties are included. Rendering more than 25,000 actionable results fails instead of truncating. `doctor` and `--dry-run` do not accept SARIF because they do not produce mutation findings. Use `--output mutation.sarif` and GitHub's SARIF upload action for code scanning.
 
 Run `crap-mutate doctor --language NAME [path ...]` before a first mutation run or after changing engine versions. Doctor checks the executable, a language-specific project marker, and the native version command without running mutation tests. It states the native report contract enforced later when a run is parsed: Gremlins v0.6 JSON, Stryker.NET schema 2, or StrykerJS schema 1.0. The version probe alone does not prove report compatibility. A missing project marker or unverified compatibility is a warning; a missing or failing engine is an error. Add `--format json` for automation.
 
@@ -380,7 +402,7 @@ Both MCP servers publish initialization instructions that tell capable clients w
 
 JSON outputs carry `reportType`, `schemaVersion`, one shared tool version, coordinate semantics, and deterministic fingerprints. Analysis is v6, mutation is v3, mutation plans are v2, and mutation doctor output has its independent v1 contract. Incompatible changes increment the contract that changed; MCP page versions are independent from their underlying report versions. Analysis v5 added Go function literals and C# lambdas, anonymous methods, and expression-bodied properties/indexers. Analysis v6 adds deterministic source-discovery policy and metadata.
 
-Coordinates are 1-based UTF-8 byte columns with exclusive ends. Analysis callable names, signatures, and ranges come from the language AST. Callable IDs hash language, normalized file path, kind, lexical signature, and same-signature occurrence, so inserting blank lines above a callable does not change its ID. Mutation wrapper IDs hash normalized file, range, mutator, and replacement; Stryker's `nativeId` and status do not affect them.
+Normalized analysis coordinates are 1-based UTF-8 byte columns with exclusive ends. Normalized mutation coordinates remain engine-native. SARIF is a separate presentation contract and converts or validates both forms as 1-based UTF-16 code units for GitHub. Analysis callable names, signatures, and ranges come from the language AST. Callable IDs hash language, normalized file path, kind, lexical signature, and same-signature occurrence, so inserting blank lines above a callable does not change its ID. Mutation wrapper IDs hash normalized file, range, mutator, and replacement; Stryker's `nativeId` and status do not affect them.
 
 `fingerprints.sources` contains normalized displayed paths and exact source-byte SHA-256 digests. Coverage metadata identifies `none`, `cobertura`, or `go-coverprofile` and can include the original displayed path and exact-byte digest. Fingerprints also cover the native mutation report, resolved Git commits when changed analysis is used, and semantic options. Absolute checkout roots and temporary report paths are not serialized into fingerprints. No timestamp is added to deterministic CLI reports; MCP mutation snapshot expiry remains envelope metadata.
 
