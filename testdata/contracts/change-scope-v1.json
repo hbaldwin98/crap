@@ -1,0 +1,15 @@
+{
+  "schemaVersion": "1", "reportType": "change-scope",
+  "tool": {"name": "crap", "version": "0.2.0", "modified": false},
+  "fingerprints": {"sources": [{"path": "src/work.go", "sha256": "0000000000000000000000000000000000000000000000000000000000000000"}], "coverage": null, "nativeReport": null, "git": {"baseCommit": "base", "headCommit": "head", "mergeBase": "merge"}, "configSha256": "1111111111111111111111111111111111111111111111111111111111111111"},
+  "coordinates": {"lineBase": 1, "columnBase": 1, "columnEncoding": "utf-8-bytes", "end": "exclusive"},
+  "grammars": [{"language": "go", "version": "v0.23.4"}],
+  "mode": "actual", "diffBase": "main", "baseCommit": "base", "headCommit": "head", "mergeBase": "merge", "threshold": 30,
+  "summary": {"changedFiles": 1, "changedCallables": 1, "edges": 1, "truncated": false, "omittedNodes": 0, "omittedEdges": 0},
+  "files": [{"id": "2222222222222222222222222222222222222222222222222222222222222222", "path": "src/work.go", "ranges": [{"startLine": 3, "endLine": 4}]}],
+  "callables": [{"id": "3333333333333333333333333333333333333333333333333333333333333333", "language": "go", "file": "src/work.go", "name": "work.Run", "kind": "function", "signature": "func Run()", "startLine": 3, "startColumn": 1, "endLine": 5, "endColumn": 2, "complexity": 1, "coveragePercent": null, "crap": 2, "changed": true, "aboveThreshold": false}],
+  "edges": [{"id": "4444444444444444444444444444444444444444444444444444444444444444", "type": "contains", "from": "2222222222222222222222222222222222222222222222222222222222222222", "to": "3333333333333333333333333333333333333333333333333333333333333333"}],
+  "seeds": [{"nodeId": "3333333333333333333333333333333333333333333333333333333333333333", "kind": "callable", "provenance": "git-diff-intersection"}, {"nodeId": "2222222222222222222222222222222222222222222222222222222222222222", "kind": "file", "provenance": "git-diff"}],
+  "limitations": ["relationships are limited to file containment"],
+  "diagnostics": []
+}

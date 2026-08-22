@@ -96,6 +96,7 @@ If no path is supplied, `crap` analyzes the current directory. Go `_test.go` and
 
 ```text
 crap [options] [path ...]
+crap scope actual --diff-base REVISION [options] [path ...]
 crap mcp
 ```
 
@@ -222,6 +223,20 @@ A typical changed-code CI check is:
 ./crap --coverage coverage.out --diff-base origin/main --threshold 20 --fail-on-threshold .
 ```
 
+### Actual Change Scope
+
+Generate deterministic scope evidence for current source changed from a Git revision:
+
+```sh
+crap scope actual --diff-base origin/main --format json .
+```
+
+The `change-scope` v1 report contains selected current-source files with Git-reported changed line ranges, callables intersecting those ranges with their complexity, coverage, CRAP data, and threshold, file-to-callable `contains` edges, and explicit Git-derived seeds. It fingerprints the same source bytes, coverage artifact, Git commits, grammars, and semantic options used during analysis. Arrays and IDs are canonically ordered, so fixed inputs produce fixed JSON report content.
+
+Git metadata, changed ranges, and source bytes are captured through separate reads. Concurrent repository changes can make one report internally inconsistent; avoid editing or checking out another revision during analysis.
+
+Scope is structural evidence, not a behavioral-impact claim. Version 1 models only current-tree files, changed callable intersections, and file containment. It does not model deleted source, semantic calls, transitive dependencies, framework wiring, or prove that unlisted code is unaffected. A changed file remains in the report when no callable intersects its changed ranges. `--format` supports `text` and `json`; `--coverage`, discovery options, `--output`, thresholds, and safe output replacement work as they do for analysis.
+
 ## MCP Server
 
 Start the stdio server with:
@@ -245,7 +260,7 @@ Example MCP client configuration:
 
 Use an absolute executable path and an explicit `--root` because an MCP client may start the server from a different working directory. On Windows, use paths such as `C:\\tools\\crap.exe` and `C:\\source\\my-project` in JSON. Repeat `--allow-root PATH` to let callers select projects under additional roots. MCP requests cannot read source or coverage files outside the selected authorized root, including through existing symlinks.
 
-The server exposes `analyze_code` and `get_analysis_results`. `analyze_code` runs one analysis, stores an immutable serialized snapshot, and returns its first page. Its inputs are:
+The server exposes analysis and change-scope tool pairs. `analyze_code` runs one analysis, stores an immutable serialized snapshot, and returns its first page. Its inputs are:
 
 | Input | Type | Default | Purpose |
 | --- | --- | --- | --- |
@@ -281,6 +296,8 @@ Every response includes `reportId`, `expiresAt`, the full analysis summary, cove
 Check `summary.aboveThreshold` for the violation count, `summary.maximumCrap` for the highest actual score, and each returned method's `aboveThreshold` field. Use the CLI JSON format when one complete unpaged report is required. The MCP server returns findings rather than a process exit code.
 
 The analysis CLI emits analysis report schema v6. The current MCP envelope uses `pageSchemaVersion: "4"` and `reportType: "analysis-page"`; historical page schemas v1 through v3 remain published. Canceling an analysis request stops discovery, coverage and Git work, parsing, file dispatch, and initial-page construction as soon as practical. Cancellation and deadline errors observed before snapshot insertion are preserved without returning a partial report. Snapshot insertion is the final commit point; for the same inputs and project state, `analyze_code` retains idempotent analysis semantics even though each successful call receives a new report ID.
+
+`analyze_change_scope` accepts the same root, path, coverage, threshold, and discovery inputs, but requires `diffBase`. It returns the complete `change-scope` v1 report inside a `pageSchemaVersion: "1"` envelope with `reportId` and `expiresAt`. Pass that ID to `get_change_scope` to retrieve the immutable report without rerunning Git or rereading source. Scope snapshots share the analysis server's bounded storage and expiration policy. These tools report structural change evidence only; callers must not present containment as semantic impact.
 
 ## Mutation Testing
 

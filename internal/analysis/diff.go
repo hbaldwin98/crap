@@ -407,8 +407,14 @@ func mergeRanges(ranges []lineRange) []lineRange {
 }
 
 func (changes changedFiles) intersects(sourcePath string, start, end int) bool {
+	ranges := changes.ranges(sourcePath)
+	index := sort.Search(len(ranges), func(index int) bool { return ranges[index].End >= start })
+	return index < len(ranges) && ranges[index].Start <= end
+}
+
+func (changes changedFiles) ranges(sourcePath string) []lineRange {
 	if changes.RepositoryRoot == "" {
-		return false
+		return nil
 	}
 	canonical := sourcePath
 	if resolved, err := filepath.EvalSymlinks(sourcePath); err == nil {
@@ -416,11 +422,9 @@ func (changes changedFiles) intersects(sourcePath string, start, end int) bool {
 	}
 	relative, err := filepath.Rel(changes.RepositoryRoot, canonical)
 	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
-		return false
+		return nil
 	}
-	ranges := changes.Files[normalizeGitPath(relative)]
-	index := sort.Search(len(ranges), func(index int) bool { return ranges[index].End >= start })
-	return index < len(ranges) && ranges[index].Start <= end
+	return changes.Files[normalizeGitPath(relative)]
 }
 
 func normalizeGitPath(value string) string {

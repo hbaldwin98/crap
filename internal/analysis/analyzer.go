@@ -81,34 +81,39 @@ func (analyzer *Analyzer) Analyze(options Options) (Report, error) {
 }
 
 func (analyzer *Analyzer) AnalyzeContext(ctx context.Context, options Options) (Report, error) {
+	report, _, err := analyzer.analyzeContext(ctx, options)
+	return report, err
+}
+
+func (analyzer *Analyzer) analyzeContext(ctx context.Context, options Options) (Report, analysisInputs, error) {
 	inputs, err := analyzer.prepareAnalysis(ctx, options)
 	if err != nil {
-		return Report{}, err
+		return Report{}, analysisInputs{}, err
 	}
 	report := newAnalysisReport(options, inputs.discovery, inputs.coverage, inputs.changes)
 	relativeFiles, fileContents, usedGrammars, err := fingerprintSources(ctx, inputs.root, inputs.files, &report)
 	if err != nil {
-		return Report{}, err
+		return Report{}, analysisInputs{}, err
 	}
 	configureAnalysisReport(&report, inputs.root, options, inputs.coverage, inputs.changes, usedGrammars, analyzer.languages)
 	coverageMatches, err := inputs.coverage.matchFilesContext(ctx, relativeFiles)
 	if err != nil {
-		return Report{}, err
+		return Report{}, analysisInputs{}, err
 	}
 	results, err := analyzer.analyzeFiles(ctx, inputs.files, relativeFiles, fileContents, coverageMatches, inputs.changes, options)
 	if err != nil {
-		return Report{}, err
+		return Report{}, analysisInputs{}, err
 	}
 	if err := appendAnalysisResults(ctx, &report, results, options.StrictCoverage); err != nil {
-		return Report{}, err
+		return Report{}, analysisInputs{}, err
 	}
 	if err := finalizeAnalysisReport(ctx, &report, len(inputs.files)); err != nil {
-		return Report{}, err
+		return Report{}, analysisInputs{}, err
 	}
 	if err := ctx.Err(); err != nil {
-		return Report{}, err
+		return Report{}, analysisInputs{}, err
 	}
-	return report, nil
+	return report, inputs, nil
 }
 
 type analysisInputs struct {

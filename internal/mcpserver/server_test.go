@@ -52,8 +52,12 @@ func TestAnalyzeCodeToolReturnsStructuredReport(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(tools.Tools) != 2 || tools.Tools[0].Name != "analyze_code" || tools.Tools[1].Name != "get_analysis_results" {
-		t.Fatalf("tools = %#v, want analyze_code and get_analysis_results", tools.Tools)
+	toolNames := make(map[string]bool, len(tools.Tools))
+	for _, tool := range tools.Tools {
+		toolNames[tool.Name] = true
+	}
+	if len(tools.Tools) != 4 || !toolNames["analyze_code"] || !toolNames["get_analysis_results"] || !toolNames["analyze_change_scope"] || !toolNames["get_change_scope"] {
+		t.Fatalf("tools = %#v, want analysis and change scope tool pairs", toolNames)
 	}
 	result, err := clientSession.CallTool(ctx, &mcp.CallToolParams{
 		Name: "analyze_code",
@@ -115,8 +119,9 @@ func TestAnalyzeCodeToolReturnsStructuredReport(t *testing.T) {
 }
 
 type fakeAnalyzer struct {
-	calls  *atomic.Int32
-	report analysis.Report
+	calls       *atomic.Int32
+	report      analysis.Report
+	scopeReport analysis.ChangeScopeReport
 }
 
 func (analyzer *fakeAnalyzer) AnalyzeContext(ctx context.Context, _ analysis.Options) (analysis.Report, error) {
@@ -125,6 +130,14 @@ func (analyzer *fakeAnalyzer) AnalyzeContext(ctx context.Context, _ analysis.Opt
 		return analysis.Report{}, err
 	}
 	return analyzer.report, nil
+}
+
+func (analyzer *fakeAnalyzer) AnalyzeChangeScopeContext(ctx context.Context, _ analysis.Options) (analysis.ChangeScopeReport, error) {
+	analyzer.calls.Add(1)
+	if err := ctx.Err(); err != nil {
+		return analysis.ChangeScopeReport{}, err
+	}
+	return analyzer.scopeReport, nil
 }
 
 func (*fakeAnalyzer) Close() {}
@@ -209,6 +222,61 @@ func TestAnalysisSnapshotIsImmutableAndExpires(t *testing.T) {
 	now = now.Add(defaultSnapshotTTL)
 	if _, err := getAnalysisResults(context.Background(), store, GetResultsInput{ReportID: item.id}); err == nil {
 		t.Fatal("expired snapshot was returned")
+	}
+}
+
+func TestChangeScopeSnapshotRunsOnceAndIsImmutable(t *testing.T) {
+	root := t.TempDir()
+	policy, err := rootauth.New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	calls := &atomic.Int32{}
+	report := analysis.ChangeScopeReport{
+		SchemaVersion: "1", ReportType: "change-scope", Mode: "actual", DiffBase: "main",
+		Files:     []analysis.ChangeScopeFile{{ID: strings.Repeat("a", 64), Path: "work.go", Ranges: []analysis.ChangeScopeRange{{StartLine: 2, EndLine: 3}}}},
+		Callables: []analysis.MethodResult{}, Edges: []analysis.ChangeScopeEdge{}, Seeds: []analysis.ChangeScopeSeed{}, Limitations: []string{}, Diagnostics: []analysis.Diagnostic{},
+	}
+	store := newSnapshotStore()
+	factory := func() (analyzerExecution, error) { return &fakeAnalyzer{calls: calls, scopeReport: report}, nil }
+	_, first, err := analyzeChangeScopeWith(context.Background(), nil, AnalyzeChangeScopeInput{Root: root, DiffBase: "main"}, policy, store, factory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if calls.Load() != 1 || first.ReportID == "" || first.PageSchemaVersion != "1" || len(first.Report.Files) != 1 {
+		t.Fatalf("output = %#v, calls = %d", first, calls.Load())
+	}
+	report.Files[0].Path = "mutated.go"
+	second, err := getChangeScope(context.Background(), store, GetChangeScopeInput{ReportID: first.ReportID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if calls.Load() != 1 || second.Report.Files[0].Path != "work.go" || second.ReportID != first.ReportID {
+		t.Fatalf("retrieved = %#v, calls = %d", second, calls.Load())
+	}
+	if _, err := getAnalysisResults(context.Background(), store, GetResultsInput{ReportID: first.ReportID}); err == nil {
+		t.Fatal("change scope snapshot was accepted as analysis")
+	}
+	expiresAt := store.snapshots[first.ReportID].expiresAt
+	store.now = func() time.Time { return expiresAt }
+	if _, err := getChangeScope(context.Background(), store, GetChangeScopeInput{ReportID: first.ReportID}); err == nil {
+		t.Fatal("expired change scope snapshot was returned")
+	}
+}
+
+func TestChangeScopeMCPRequiresInputs(t *testing.T) {
+	root := t.TempDir()
+	policy, err := rootauth.New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := newSnapshotStore()
+	factory := func() (analyzerExecution, error) { return &fakeAnalyzer{calls: &atomic.Int32{}}, nil }
+	if _, _, err := analyzeChangeScopeWith(context.Background(), nil, AnalyzeChangeScopeInput{Root: root}, policy, store, factory); err == nil {
+		t.Fatal("missing diff base was accepted")
+	}
+	if _, err := getChangeScope(context.Background(), store, GetChangeScopeInput{}); err == nil {
+		t.Fatal("missing report ID was accepted")
 	}
 }
 

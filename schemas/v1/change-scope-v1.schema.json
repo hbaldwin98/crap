@@ -1,0 +1,80 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "change-scope-v1.schema.json",
+  "type": "object",
+  "required": ["schemaVersion", "reportType", "tool", "fingerprints", "coordinates", "grammars", "mode", "diffBase", "baseCommit", "headCommit", "mergeBase", "threshold", "summary", "files", "callables", "edges", "seeds", "limitations", "diagnostics"],
+  "properties": {
+    "schemaVersion": { "const": "1" },
+    "reportType": { "const": "change-scope" },
+    "tool": { "$ref": "common.schema.json#/$defs/tool" },
+    "fingerprints": { "$ref": "common.schema.json#/$defs/fingerprints" },
+    "coordinates": { "$ref": "common.schema.json#/$defs/coordinates" },
+    "grammars": { "type": "array", "items": { "oneOf": [{ "const": {"language": "csharp", "version": "v0.23.5"} }, { "const": {"language": "go", "version": "v0.23.4"} }, { "const": {"language": "typescript", "version": "v0.23.2"} }, { "const": {"language": "tsx", "version": "v0.23.2"} }] } },
+    "mode": { "const": "actual" },
+    "diffBase": { "type": "string", "minLength": 1 },
+    "baseCommit": { "type": "string", "minLength": 1 },
+    "headCommit": { "type": "string", "minLength": 1 },
+    "mergeBase": { "type": "string", "minLength": 1 },
+    "threshold": { "type": "number", "minimum": 0 },
+    "summary": {
+      "type": "object",
+      "required": ["changedFiles", "changedCallables", "edges", "truncated", "omittedNodes", "omittedEdges"],
+      "properties": {
+        "changedFiles": { "type": "integer", "minimum": 0 },
+        "changedCallables": { "type": "integer", "minimum": 0 },
+        "edges": { "type": "integer", "minimum": 0 },
+        "truncated": { "type": "boolean" },
+        "omittedNodes": { "type": "integer", "minimum": 0 },
+        "omittedEdges": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
+    "files": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "path", "ranges"],
+        "properties": {
+          "id": { "$ref": "common.schema.json#/$defs/digest" },
+          "path": { "$ref": "common.schema.json#/$defs/relativePath" },
+          "ranges": {
+            "type": "array", "minItems": 1,
+            "items": {
+              "type": "object", "required": ["startLine", "endLine"],
+              "properties": { "startLine": { "type": "integer", "minimum": 1 }, "endLine": { "type": "integer", "minimum": 1 } },
+              "additionalProperties": false
+            }
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "callables": { "type": "array", "items": { "$ref": "common.schema.json#/$defs/method" } },
+    "edges": {
+      "type": "array",
+      "items": {
+        "type": "object", "required": ["id", "type", "from", "to"],
+        "properties": {
+          "id": { "$ref": "common.schema.json#/$defs/digest" }, "type": { "const": "contains" },
+          "from": { "$ref": "common.schema.json#/$defs/digest" }, "to": { "$ref": "common.schema.json#/$defs/digest" }
+        },
+        "additionalProperties": false
+      }
+    },
+    "seeds": {
+      "type": "array",
+      "items": {
+        "type": "object", "required": ["nodeId", "kind", "provenance"],
+        "properties": {
+          "nodeId": { "$ref": "common.schema.json#/$defs/digest" },
+          "kind": { "enum": ["file", "callable"] },
+          "provenance": { "enum": ["git-diff", "git-diff-intersection"] }
+        },
+        "additionalProperties": false
+      }
+    },
+    "limitations": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+    "diagnostics": { "type": "array", "items": { "$ref": "common.schema.json#/$defs/diagnostic" } }
+  },
+  "additionalProperties": false
+}

@@ -3,11 +3,15 @@ package contracts_test
 import (
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/hbaldwin98/crap/internal/analysis"
+	"github.com/hbaldwin98/crap/internal/mcpserver"
 	"github.com/hbaldwin98/crap/internal/mutation"
 	"github.com/santhosh-tekuri/jsonschema/v6"
 )
@@ -24,6 +28,8 @@ var contractFixtures = map[string]string{
 	"mutation-mcp-page-v2.schema.json": "mutation-mcp-page-v2.json",
 	"mutation-plan-v2.schema.json":     "mutation-plan-v2.json",
 	"mutation-doctor-v1.schema.json":   "mutation-doctor-v1.json",
+	"change-scope-v1.schema.json":      "change-scope-v1.json",
+	"change-scope-mcp-v1.schema.json":  "change-scope-mcp-v1.json",
 }
 
 func TestGoldenContractFixtures(t *testing.T) {
@@ -51,12 +57,38 @@ func TestGeneratedAnalysisAndPlanValidate(t *testing.T) {
 		t.Fatal(err)
 	}
 	validateValue(t, filepath.Join(root, "schemas", "v1", "analysis-report-v6.schema.json"), report)
+	runGit(t, project, "init")
+	runGit(t, project, "add", ".")
+	runGit(t, project, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "baseline")
+	if err := os.WriteFile(filepath.Join(project, "work.go"), []byte("package work\n\nfunc Run() { println(1) }\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	scope, err := analyzer.AnalyzeChangeScope(analysis.Options{Root: project, Paths: []string{"work.go"}, DiffBase: "HEAD", CRAPThreshold: 30})
+	if err != nil {
+		t.Fatal(err)
+	}
+	validateValue(t, filepath.Join(root, "schemas", "v1", "change-scope-v1.schema.json"), scope)
+	validateValue(t, filepath.Join(root, "schemas", "v1", "change-scope-mcp-v1.schema.json"), mcpserver.ChangeScopeOutput{
+		PageSchemaVersion: "1",
+		ReportID:          strings.Repeat("1", 32),
+		ExpiresAt:         time.Date(2026, time.August, 21, 12, 0, 0, 0, time.UTC).Format(time.RFC3339),
+		Report:            scope,
+	})
 
 	plan, err := mutation.NewService().Plan(mutation.Options{Root: project, Language: "go", Paths: []string{"."}, MinimumScore: 80, TimeoutSeconds: 60})
 	if err != nil {
 		t.Fatal(err)
 	}
 	validateValue(t, filepath.Join(root, "schemas", "v1", "mutation-plan-v2.schema.json"), plan)
+}
+
+func runGit(t *testing.T, root string, arguments ...string) {
+	t.Helper()
+	command := exec.Command("git", arguments...)
+	command.Dir = root
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("git %v: %v: %s", arguments, err, output)
+	}
 }
 
 func TestSchemasRejectInvalidContracts(t *testing.T) {

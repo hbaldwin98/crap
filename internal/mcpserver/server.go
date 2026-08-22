@@ -35,6 +35,29 @@ type GetResultsInput struct {
 	Cursor     string `json:"cursor,omitempty" jsonschema:"Opaque continuation cursor. Do not combine with other fields."`
 }
 
+type AnalyzeChangeScopeInput struct {
+	Root             string   `json:"root,omitempty" jsonschema:"Working directory used to resolve paths, coverage, and Git revisions. Defaults to the MCP server working directory."`
+	Paths            []string `json:"paths,omitempty" jsonschema:"C#, Go, TypeScript, or TSX files and directories to inspect, relative to root. Defaults to the root directory."`
+	CoveragePath     string   `json:"coveragePath,omitempty" jsonschema:"Optional Cobertura XML or Go coverprofile used to decorate changed callables."`
+	DiffBase         string   `json:"diffBase" jsonschema:"Required Git revision whose merge base with HEAD defines actual change scope."`
+	CRAPThreshold    *float64 `json:"crapThreshold,omitempty" jsonschema:"Score above which a changed callable is flagged. Defaults to 30."`
+	IncludeTests     bool     `json:"includeTests,omitempty" jsonschema:"Include Go _test.go and TypeScript .spec/.test files. Defaults to false."`
+	IncludeGenerated bool     `json:"includeGenerated,omitempty" jsonschema:"Include generated source conventions. Defaults to false."`
+	Exclude          []string `json:"exclude,omitempty" jsonschema:"Root-relative source exclusion patterns using gitignore syntax."`
+	StrictCoverage   bool     `json:"strictCoverage,omitempty" jsonschema:"Fail when coverage paths are unmatched or ambiguous."`
+}
+
+type GetChangeScopeInput struct {
+	ReportID string `json:"reportId" jsonschema:"Change scope report ID returned by analyze_change_scope."`
+}
+
+type ChangeScopeOutput struct {
+	PageSchemaVersion string                     `json:"pageSchemaVersion"`
+	ReportID          string                     `json:"reportId"`
+	ExpiresAt         string                     `json:"expiresAt"`
+	Report            analysis.ChangeScopeReport `json:"report"`
+}
+
 type AnalyzeOutput struct {
 	PageSchemaVersion string                      `json:"pageSchemaVersion"`
 	ReportType        string                      `json:"reportType"`
@@ -72,6 +95,7 @@ type Page struct {
 
 type analyzerExecution interface {
 	AnalyzeContext(context.Context, analysis.Options) (analysis.Report, error)
+	AnalyzeChangeScopeContext(context.Context, analysis.Options) (analysis.ChangeScopeReport, error)
 	Close()
 }
 
@@ -87,7 +111,7 @@ func New(version string, policy *rootauth.Policy) *mcp.Server {
 
 func newServer(version string, policy *rootauth.Policy, snapshots *snapshotStore, factory analyzerFactory) *mcp.Server {
 	server := mcp.NewServer(&mcp.Implementation{Name: "crap", Version: version}, &mcp.ServerOptions{
-		Instructions: "Use analyze_code whenever the user asks to run, check, or report CRAP scores or cyclomatic complexity for C#, Go, or TypeScript. Never estimate these scores yourself. Start with the default violations view or resultMode=summary, then use get_analysis_results for later immutable pages.",
+		Instructions: "Use analyze_code whenever the user asks to run, check, or report CRAP scores or cyclomatic complexity for C#, Go, or TypeScript. Never estimate these scores yourself. Start with the default violations view or resultMode=summary, then use get_analysis_results for later immutable pages. Use analyze_change_scope for Git-reported current-source ranges, intersecting callables, and file containment. Do not present change scope as semantic impact or proof that unlisted code is unaffected; use get_change_scope to retrieve its immutable snapshot.",
 	})
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "analyze_code",
@@ -105,7 +129,90 @@ func newServer(version string, policy *rootauth.Policy, snapshots *snapshotStore
 		output, err := getAnalysisResults(ctx, snapshots, input)
 		return nil, output, err
 	})
+	mcp.AddTool(server, &mcp.Tool{
+		Name: "analyze_change_scope", Title: "Analyze actual change scope",
+		Description: "Build deterministic actual-change evidence from Git ranges, changed callables, and file containment. It does not claim semantic or behavioral impact.",
+		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true, IdempotentHint: true, OpenWorldHint: boolPointer(false), DestructiveHint: boolPointer(false)},
+	}, func(ctx context.Context, request *mcp.CallToolRequest, input AnalyzeChangeScopeInput) (*mcp.CallToolResult, ChangeScopeOutput, error) {
+		return analyzeChangeScopeWith(ctx, request, input, policy, snapshots, factory)
+	})
+	mcp.AddTool(server, &mcp.Tool{
+		Name: "get_change_scope", Title: "Get change scope",
+		Description: "Read a retained immutable change scope report without rerunning Git analysis.",
+		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true, IdempotentHint: true, OpenWorldHint: boolPointer(false), DestructiveHint: boolPointer(false)},
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, input GetChangeScopeInput) (*mcp.CallToolResult, ChangeScopeOutput, error) {
+		output, err := getChangeScope(ctx, snapshots, input)
+		return nil, output, err
+	})
 	return server
+}
+
+func analyzeChangeScopeWith(ctx context.Context, _ *mcp.CallToolRequest, input AnalyzeChangeScopeInput, policy *rootauth.Policy, snapshots *snapshotStore, factory analyzerFactory) (*mcp.CallToolResult, ChangeScopeOutput, error) {
+	if input.DiffBase == "" {
+		return nil, ChangeScopeOutput{}, fmt.Errorf("diffBase is required")
+	}
+	root, err := analysisRoot(input.Root)
+	if err != nil {
+		return nil, ChangeScopeOutput{}, err
+	}
+	scope, err := policy.Root(root)
+	if err != nil {
+		return nil, ChangeScopeOutput{}, err
+	}
+	threshold, err := analysisThreshold(input.CRAPThreshold)
+	if err != nil {
+		return nil, ChangeScopeOutput{}, err
+	}
+	analyzer, err := factory()
+	if err != nil {
+		return nil, ChangeScopeOutput{}, err
+	}
+	defer analyzer.Close()
+	report, err := analyzer.AnalyzeChangeScopeContext(ctx, analysis.Options{
+		Root: scope.Path(), Paths: input.Paths, CoveragePath: input.CoveragePath, DiffBase: input.DiffBase,
+		CRAPThreshold: threshold, IncludeTests: input.IncludeTests, IncludeGenerated: input.IncludeGenerated,
+		Exclude: input.Exclude, StrictCoverage: input.StrictCoverage, Authorization: scope,
+	})
+	if err != nil {
+		return nil, ChangeScopeOutput{}, err
+	}
+	item, err := snapshots.putChangeScopeContext(ctx, report)
+	if err != nil {
+		return nil, ChangeScopeOutput{}, err
+	}
+	return nil, decorateChangeScope(report, item), nil
+}
+
+func getChangeScope(ctx context.Context, snapshots *snapshotStore, input GetChangeScopeInput) (ChangeScopeOutput, error) {
+	if input.ReportID == "" {
+		return ChangeScopeOutput{}, fmt.Errorf("reportId is required")
+	}
+	item, err := snapshots.get(input.ReportID)
+	if err != nil {
+		return ChangeScopeOutput{}, err
+	}
+	select {
+	case snapshots.reads <- struct{}{}:
+		defer func() { <-snapshots.reads }()
+	case <-ctx.Done():
+		return ChangeScopeOutput{}, ctx.Err()
+	}
+	report, err := snapshots.decodeChangeScope(item)
+	if err != nil {
+		return ChangeScopeOutput{}, err
+	}
+	item, err = snapshots.get(input.ReportID)
+	if err != nil {
+		return ChangeScopeOutput{}, err
+	}
+	if err := ctx.Err(); err != nil {
+		return ChangeScopeOutput{}, err
+	}
+	return decorateChangeScope(report, item), nil
+}
+
+func decorateChangeScope(report analysis.ChangeScopeReport, item *snapshot) ChangeScopeOutput {
+	return ChangeScopeOutput{PageSchemaVersion: "1", ReportID: item.id, ExpiresAt: item.expiresAt.UTC().Format(time.RFC3339), Report: report}
 }
 
 func analyze(ctx context.Context, request *mcp.CallToolRequest, input AnalyzeInput, policy *rootauth.Policy) (*mcp.CallToolResult, AnalyzeOutput, error) {
@@ -204,6 +311,10 @@ func getAnalysisResults(ctx context.Context, snapshots *snapshotStore, input Get
 		return AnalyzeOutput{}, ctx.Err()
 	}
 	report, err := snapshots.decode(item)
+	if err != nil {
+		return AnalyzeOutput{}, err
+	}
+	item, err = snapshots.get(reportID)
 	if err != nil {
 		return AnalyzeOutput{}, err
 	}

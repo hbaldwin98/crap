@@ -1,0 +1,15 @@
+{
+  "pageSchemaVersion": "1",
+  "reportId": "11111111111111111111111111111111",
+  "expiresAt": "2026-08-21T12:00:00Z",
+  "report": {
+    "schemaVersion": "1", "reportType": "change-scope",
+    "tool": {"name": "crap", "version": "0.2.0", "modified": false},
+    "fingerprints": {"sources": [], "coverage": null, "nativeReport": null, "git": {"baseCommit": "base", "headCommit": "head", "mergeBase": "merge"}, "configSha256": "1111111111111111111111111111111111111111111111111111111111111111"},
+    "coordinates": {"lineBase": 1, "columnBase": 1, "columnEncoding": "utf-8-bytes", "end": "exclusive"},
+    "grammars": [], "mode": "actual", "diffBase": "main", "baseCommit": "base", "headCommit": "head", "mergeBase": "merge", "threshold": 30,
+    "summary": {"changedFiles": 0, "changedCallables": 0, "edges": 0, "truncated": false, "omittedNodes": 0, "omittedEdges": 0},
+    "files": [], "callables": [], "edges": [], "seeds": [],
+    "limitations": ["relationships are limited to file containment"], "diagnostics": []
+  }
+}

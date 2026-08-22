@@ -25,6 +25,7 @@ const (
 type snapshot struct {
 	id        string
 	expiresAt time.Time
+	kind      string
 	data      []byte
 }
 
@@ -55,10 +56,18 @@ func (store *snapshotStore) put(report analysis.Report) (*snapshot, error) {
 }
 
 func (store *snapshotStore) putContext(ctx context.Context, report analysis.Report) (*snapshot, error) {
+	return store.putValueContext(ctx, "analysis", report)
+}
+
+func (store *snapshotStore) putChangeScopeContext(ctx context.Context, report analysis.ChangeScopeReport) (*snapshot, error) {
+	return store.putValueContext(ctx, "change-scope", report)
+}
+
+func (store *snapshotStore) putValueContext(ctx context.Context, kind string, value any) (*snapshot, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	data, err := json.Marshal(report)
+	data, err := json.Marshal(value)
 	if err != nil {
 		return nil, fmt.Errorf("serialize analysis snapshot: %w", err)
 	}
@@ -72,7 +81,7 @@ func (store *snapshotStore) putContext(ctx context.Context, report analysis.Repo
 	if _, err := rand.Read(idBytes); err != nil {
 		return nil, fmt.Errorf("create analysis report ID: %w", err)
 	}
-	item := &snapshot{id: hex.EncodeToString(idBytes), expiresAt: store.now().Add(store.ttl), data: append([]byte(nil), data...)}
+	item := &snapshot{id: hex.EncodeToString(idBytes), expiresAt: store.now().Add(store.ttl), kind: kind, data: append([]byte(nil), data...)}
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	if err := ctx.Err(); err != nil {
@@ -127,9 +136,23 @@ func (store *snapshotStore) removeLocked(id string) {
 }
 
 func (store *snapshotStore) decode(item *snapshot) (analysis.Report, error) {
+	if item.kind != "analysis" {
+		return analysis.Report{}, fmt.Errorf("snapshot is not an analysis report")
+	}
 	var report analysis.Report
 	if err := json.Unmarshal(item.data, &report); err != nil {
 		return analysis.Report{}, fmt.Errorf("decode analysis snapshot: %w", err)
+	}
+	return report, nil
+}
+
+func (store *snapshotStore) decodeChangeScope(item *snapshot) (analysis.ChangeScopeReport, error) {
+	if item.kind != "change-scope" {
+		return analysis.ChangeScopeReport{}, fmt.Errorf("snapshot is not a change scope report")
+	}
+	var report analysis.ChangeScopeReport
+	if err := json.Unmarshal(item.data, &report); err != nil {
+		return analysis.ChangeScopeReport{}, fmt.Errorf("decode change scope snapshot: %w", err)
 	}
 	return report, nil
 }

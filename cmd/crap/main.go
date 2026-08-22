@@ -44,6 +44,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 	if len(args) > 0 && args[0] == "mcp" {
 		return runMCP(args[1:], stdout, stderr)
 	}
+	if len(args) > 0 && args[0] == "scope" {
+		return runScope(args[1:], stdout, stderr)
+	}
 	options, ok := parseOptionsWithHelp(args, stdout, stderr)
 	if !ok {
 		return 1
@@ -56,6 +59,33 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 0
 	}
 	return runAnalysis(options, stdout, stderr)
+}
+
+func runScope(args []string, stdout, stderr io.Writer) int {
+	if len(args) == 0 || args[0] != "actual" {
+		fmt.Fprintln(stderr, "crap: scope requires the actual subcommand")
+		return 1
+	}
+	options, ok := parseOptionsWithHelp(args[1:], stdout, stderr)
+	if !ok {
+		return 1
+	}
+	if options.showHelp {
+		return 0
+	}
+	if options.showVersion {
+		fmt.Fprintln(stdout, buildinfo.CurrentVersion())
+		return 0
+	}
+	if options.diffBase == "" {
+		fmt.Fprintln(stderr, "crap: scope actual requires --diff-base")
+		return 1
+	}
+	if options.format == "sarif" {
+		fmt.Fprintln(stderr, "crap: scope actual supports text or json output")
+		return 1
+	}
+	return runScopeAnalysis(options, stdout, stderr)
 }
 
 func runMCP(args []string, stdout, stderr io.Writer) int {
@@ -176,9 +206,86 @@ func parseOptionsWithHelp(args []string, help, stderr io.Writer) (cliOptions, bo
 
 func writeUsage(writer io.Writer, flags *flag.FlagSet) {
 	fmt.Fprintln(writer, "Usage: crap [options] [path ...]")
+	fmt.Fprintln(writer, "       crap scope actual --diff-base REVISION [options] [path ...]")
 	fmt.Fprintln(writer, "       crap mcp")
 	fmt.Fprintln(writer, "Deterministically calculate cyclomatic complexity and CRAP scores for C#, Go, and TypeScript callables.")
 	flags.PrintDefaults()
+}
+
+func runScopeAnalysis(options cliOptions, stdout, stderr io.Writer) int {
+	if options.output != "" {
+		if err := clioutput.Validate(options.output); err != nil {
+			fmt.Fprintf(stderr, "crap: invalid output path: %v\n", err)
+			return 1
+		}
+	}
+	root, err := os.Getwd()
+	if err != nil {
+		fmt.Fprintf(stderr, "crap: determine working directory: %v\n", err)
+		return 1
+	}
+	analyzer, err := analysis.NewAnalyzer()
+	if err != nil {
+		fmt.Fprintf(stderr, "crap: %v\n", err)
+		return 1
+	}
+	defer analyzer.Close()
+	report, err := analyzer.AnalyzeChangeScope(analysis.Options{
+		Paths: options.paths, CoveragePath: options.coverage, DiffBase: options.diffBase,
+		Root: root, CRAPThreshold: options.threshold, IncludeTests: options.includeTests, IncludeGenerated: options.includeGenerated,
+		Exclude: options.excludes, StrictCoverage: options.strictCoverage,
+	})
+	if err != nil {
+		fmt.Fprintf(stderr, "crap: %v\n", err)
+		return 1
+	}
+	if err := clioutput.Write(stdout, options.output, func(writer io.Writer) error {
+		if options.format == "json" {
+			encoder := json.NewEncoder(writer)
+			encoder.SetIndent("", "  ")
+			return encoder.Encode(report)
+		}
+		return writeScopeText(writer, report)
+	}); err != nil {
+		fmt.Fprintf(stderr, "crap: write report: %v\n", err)
+		return 1
+	}
+	if options.failOnThreshold {
+		for _, callable := range report.Callables {
+			if callable.AboveThreshold {
+				return 2
+			}
+		}
+	}
+	return 0
+}
+
+func writeScopeText(writer io.Writer, report analysis.ChangeScopeReport) error {
+	if _, err := fmt.Fprintf(writer, "%d changed callables in %d changed files\n", report.Summary.ChangedCallables, report.Summary.ChangedFiles); err != nil {
+		return err
+	}
+	for _, file := range report.Files {
+		for _, changed := range file.Ranges {
+			location := fmt.Sprintf("%s:%d", filepath.ToSlash(file.Path), changed.StartLine)
+			if changed.EndLine != changed.StartLine {
+				location = fmt.Sprintf("%s-%d", location, changed.EndLine)
+			}
+			if _, err := fmt.Fprintf(writer, "%s changed\n", location); err != nil {
+				return err
+			}
+		}
+	}
+	for _, callable := range report.Callables {
+		if _, err := fmt.Fprintf(writer, "%s (%s:%d) CRAP %.2f\n", callable.Name, filepath.ToSlash(callable.File), callable.StartLine, callable.CRAP); err != nil {
+			return err
+		}
+	}
+	for _, limitation := range report.Limitations {
+		if _, err := fmt.Fprintf(writer, "limitation: %s\n", limitation); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func runAnalysis(options cliOptions, stdout, stderr io.Writer) int {

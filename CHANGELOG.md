@@ -13,6 +13,9 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Mutation orchestration and normalized reports for Stryker.NET, Gremlins, and
   StrykerJS, with planning and setup diagnostics.
 - Versioned JSON schemas and golden contract fixtures.
+- Deterministic actual-change scope reports through CLI and immutable MCP tools,
+  with Git ranges, changed callable seeds, containment evidence, and explicit
+  limitations.
 
 ### Changed
 
