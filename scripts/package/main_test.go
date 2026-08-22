@@ -3,7 +3,10 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
+
+	"github.com/hbaldwin98/crap/internal/buildinfo"
 )
 
 func TestWriteArchiveIsDeterministic(t *testing.T) {
@@ -38,11 +41,39 @@ func TestWriteArchiveIsDeterministic(t *testing.T) {
 }
 
 func TestRunRejectsVersionAndRevisionMismatch(t *testing.T) {
-	if err := run("0.2.1", "e68097dfe68097dfe68097dfe68097dfe68097df", t.TempDir()); err == nil {
+	if err := run(buildinfo.Version+"-mismatch", "e68097dfe68097dfe68097dfe68097dfe68097df", t.TempDir()); err == nil {
 		t.Fatal("mismatched release version was accepted")
 	}
-	if err := run("0.2.0", "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz", t.TempDir()); err == nil {
+	if err := run(buildinfo.Version, "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz", t.TempDir()); err == nil {
 		t.Fatal("non-hexadecimal revision was accepted")
+	}
+}
+
+func TestRunBuildsReleaseArchive(t *testing.T) {
+	original, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(filepath.Join("..", "..")); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chdir(original); err != nil {
+			t.Errorf("restore working directory: %v", err)
+		}
+	})
+
+	output := t.TempDir()
+	if err := run(buildinfo.Version, "0123456789abcdef0123456789abcdef01234567", output); err != nil {
+		t.Fatal(err)
+	}
+	extension := ".tar.gz"
+	if runtime.GOOS == "windows" {
+		extension = ".zip"
+	}
+	archive := filepath.Join(output, "crap_v"+buildinfo.Version+"_"+runtime.GOOS+"_"+runtime.GOARCH+extension)
+	if info, err := os.Stat(archive); err != nil || info.Size() == 0 {
+		t.Fatalf("release archive %s: info=%v err=%v", archive, info, err)
 	}
 }
 

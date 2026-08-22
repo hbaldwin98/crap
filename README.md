@@ -98,7 +98,7 @@ The threshold does not change or cap calculated scores. It sets `aboveThreshold`
 
 Directory analysis honors repository `.gitignore` files and an optional root `.crapignore`, both with gitignore pattern semantics. `--exclude` adds non-negated root-relative exclusions. Explicitly named source files override `.gitignore`, `.crapignore`, generated-file, and test-file defaults, but not `--exclude`; explicitly named unsupported files fail instead of disappearing silently.
 
-Built-in directory exclusions cover `.git`, `node_modules`, `.next`, `bin`, and `obj` at any depth, plus root `vendor`, `dist`, `build`, and `coverage`. Generated files such as `*.g.cs`, `*.generated.cs`, `*.designer.cs`, `*.d.ts`, and `*.generated.ts` are excluded unless `--include-generated` is set. JSON reports include a compact `discovery` section with the selected count and deterministic exclusion counts/examples.
+Built-in directory exclusions cover `.git`, `node_modules`, `.next`, `bin`, `obj`, and Go-style `testdata` directories at any depth, plus root `vendor`, `dist`, `build`, and `coverage`. An explicitly named source file remains selectable even inside one of these directories. Generated files such as `*.g.cs`, `*.generated.cs`, `*.designer.cs`, `*.d.ts`, and `*.generated.ts` are excluded unless `--include-generated` is set. JSON reports include a compact `discovery` section with the selected count and deterministic exclusion counts/examples.
 
 Exit codes:
 

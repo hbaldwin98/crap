@@ -203,6 +203,26 @@ func TestCoberturaExternalAbsolutePathDoesNotLeak(t *testing.T) {
 	}
 }
 
+func TestSafeCoverageIdentity(t *testing.T) {
+	for _, test := range []struct {
+		value string
+		want  bool
+	}{
+		{"src/work.ts", true},
+		{"", false},
+		{".", false},
+		{"..", false},
+		{"../work.ts", false},
+		{"src/../work.ts", false},
+		{"/work.ts", false},
+		{"C:/work.ts", false},
+	} {
+		if got := safeCoverageIdentity(test.value); got != test.want {
+			t.Errorf("safeCoverageIdentity(%q) = %t, want %t", test.value, got, test.want)
+		}
+	}
+}
+
 func TestMethodCoverageExcludesNestedRanges(t *testing.T) {
 	spans := []coverageSpan{
 		{StartLine: 2, EndLine: 2, Statements: 1, Covered: true},

@@ -49,7 +49,7 @@ func TestFindSourceFilesHonorsIgnoreAndGeneratedPolicies(t *testing.T) {
 	for _, name := range []string{
 		"keep.go", "ignored.go", "custom.go", "excluded.go", "work_test.go", "generated.g.cs",
 		"generated.g.i.cs", "generated.AssemblyInfo.cs", "nested/keep.ts", "nested/ignored.ts",
-		"node_modules/dependency.ts", "vendor/dependency.go",
+		"node_modules/dependency.ts", "vendor/dependency.go", "testdata/fixture.go", "nested/testdata/fixture.ts",
 	} {
 		write(name)
 	}
@@ -84,6 +84,14 @@ func TestFindSourceFilesHonorsIgnoreAndGeneratedPolicies(t *testing.T) {
 	}
 	if got := relativePaths(t, root, discovery.files); !slices.Equal(got, []string{"generated.g.cs", "work_test.go"}) {
 		t.Fatalf("explicit files = %v", got)
+	}
+
+	discovery, err = findSourceFiles(root, []string{"nested/testdata/fixture.ts"}, nil, false, false, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := relativePaths(t, root, discovery.files); !slices.Equal(got, []string{"nested/testdata/fixture.ts"}) {
+		t.Fatalf("explicit testdata file = %v", got)
 	}
 
 	discovery, err = findSourceFiles(root, []string{"."}, nil, true, true, nil)

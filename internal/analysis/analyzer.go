@@ -81,24 +81,63 @@ func (analyzer *Analyzer) Analyze(options Options) (Report, error) {
 }
 
 func (analyzer *Analyzer) AnalyzeContext(ctx context.Context, options Options) (Report, error) {
+	inputs, err := analyzer.prepareAnalysis(ctx, options)
+	if err != nil {
+		return Report{}, err
+	}
+	report := newAnalysisReport(options, inputs.discovery, inputs.coverage, inputs.changes)
+	relativeFiles, fileContents, usedGrammars, err := fingerprintSources(ctx, inputs.root, inputs.files, &report)
+	if err != nil {
+		return Report{}, err
+	}
+	configureAnalysisReport(&report, inputs.root, options, inputs.coverage, inputs.changes, usedGrammars, analyzer.languages)
+	coverageMatches, err := inputs.coverage.matchFilesContext(ctx, relativeFiles)
+	if err != nil {
+		return Report{}, err
+	}
+	results, err := analyzer.analyzeFiles(ctx, inputs.files, relativeFiles, fileContents, coverageMatches, inputs.changes, options)
+	if err != nil {
+		return Report{}, err
+	}
+	if err := appendAnalysisResults(ctx, &report, results, options.StrictCoverage); err != nil {
+		return Report{}, err
+	}
+	if err := finalizeAnalysisReport(ctx, &report, len(inputs.files)); err != nil {
+		return Report{}, err
+	}
 	if err := ctx.Err(); err != nil {
 		return Report{}, err
 	}
+	return report, nil
+}
+
+type analysisInputs struct {
+	root      string
+	discovery discoveryResult
+	files     []string
+	coverage  coverageData
+	changes   changedFiles
+}
+
+func (analyzer *Analyzer) prepareAnalysis(ctx context.Context, options Options) (analysisInputs, error) {
+	if err := ctx.Err(); err != nil {
+		return analysisInputs{}, err
+	}
 	root, err := filepath.Abs(options.Root)
 	if err != nil {
-		return Report{}, fmt.Errorf("resolve root: %w", err)
+		return analysisInputs{}, fmt.Errorf("resolve root: %w", err)
 	}
 	if options.Authorization != nil {
 		root = options.Authorization.Path()
 	} else {
 		root, err = filepath.EvalSymlinks(root)
 		if err != nil {
-			return Report{}, fmt.Errorf("resolve root links: %w", err)
+			return analysisInputs{}, fmt.Errorf("resolve root links: %w", err)
 		}
 	}
 	discovery, err := findSourceFilesContext(ctx, root, options.Paths, options.Exclude, options.IncludeTests, options.IncludeGenerated, options.Authorization)
 	if err != nil {
-		return Report{}, err
+		return analysisInputs{}, err
 	}
 	files := discovery.files
 	coveragePath := options.CoveragePath
@@ -108,18 +147,21 @@ func (analyzer *Analyzer) AnalyzeContext(ctx context.Context, options Options) (
 	if coveragePath != "" && options.Authorization != nil {
 		coveragePath, err = options.Authorization.Existing(coveragePath)
 		if err != nil {
-			return Report{}, fmt.Errorf("authorize coverage report: %w", err)
+			return analysisInputs{}, fmt.Errorf("authorize coverage report: %w", err)
 		}
 	}
 	coverage, err := loadCoverageContext(ctx, coveragePath, root)
 	if err != nil {
-		return Report{}, err
+		return analysisInputs{}, err
 	}
 	changes, err := gitChangedLinesContext(ctx, root, options.DiffBase, files, analyzer.git, options.Authorization)
 	if err != nil {
-		return Report{}, err
+		return analysisInputs{}, err
 	}
+	return analysisInputs{root: root, discovery: discovery, files: files, coverage: coverage, changes: changes}, nil
+}
 
+func newAnalysisReport(options Options, discovery discoveryResult, coverage coverageData, changes changedFiles) Report {
 	report := Report{
 		SchemaVersion:  SchemaVersion,
 		ReportType:     "analysis",
@@ -143,31 +185,39 @@ func (analyzer *Analyzer) AnalyzeContext(ctx context.Context, options Options) (
 	if options.DiffBase != "" {
 		report.Mode = "changed"
 	}
+	return report
+}
+
+func fingerprintSources(ctx context.Context, root string, files []string, report *Report) ([]string, [][]byte, map[string]bool, error) {
 	relativeFiles := make([]string, len(files))
 	fileContents := make([][]byte, len(files))
 	report.Fingerprints.Sources = make([]reportcontract.FileFingerprint, 0, len(files))
 	usedGrammars := make(map[string]bool)
 	for index, file := range files {
 		if err := ctx.Err(); err != nil {
-			return Report{}, err
+			return nil, nil, nil, err
 		}
 		relative, err := filepath.Rel(root, file)
 		if err != nil {
-			return Report{}, fmt.Errorf("make path relative: %w", err)
+			return nil, nil, nil, fmt.Errorf("make path relative: %w", err)
 		}
 		relativeFiles[index] = normalizePath(relative)
 		data, err := os.ReadFile(file)
 		if contextErr := ctx.Err(); contextErr != nil {
-			return Report{}, contextErr
+			return nil, nil, nil, contextErr
 		}
 		if err != nil {
-			return Report{}, fmt.Errorf("fingerprint %s: %w", file, err)
+			return nil, nil, nil, fmt.Errorf("fingerprint %s: %w", file, err)
 		}
 		fileContents[index] = data
 		report.Fingerprints.Sources = append(report.Fingerprints.Sources, reportcontract.FileFingerprint{Path: relativeFiles[index], SHA256: reportcontract.SHA256(data)})
 		usedGrammars[strings.ToLower(filepath.Ext(file))] = true
 	}
 	reportcontract.SortFiles(report.Fingerprints.Sources)
+	return relativeFiles, fileContents, usedGrammars, nil
+}
+
+func configureAnalysisReport(report *Report, root string, options Options, coverage coverageData, changes changedFiles, usedGrammars map[string]bool, languages map[string]languageDefinition) {
 	if coverage.loaded {
 		report.Fingerprints.Coverage = &reportcontract.FileFingerprint{Path: normalizeDisplayedPath(options.CoveragePath), SHA256: coverage.sha256}
 	}
@@ -197,51 +247,47 @@ func (analyzer *Analyzer) AnalyzeContext(ctx context.Context, options Options) (
 		Discovery        DiscoveryMetadata `json:"discovery"`
 	}{SchemaVersion, configPaths, options.DiffBase, options.CRAPThreshold, options.IncludeTests, options.IncludeGenerated, configExcludes, options.StrictCoverage, report.Discovery})
 	for extension := range usedGrammars {
-		language := analyzer.languages[extension]
+		language := languages[extension]
 		report.Grammars = append(report.Grammars, GrammarIdentity{Language: language.grammarLanguage, Version: language.grammarVersion})
 	}
 	sort.Slice(report.Grammars, func(i, j int) bool { return report.Grammars[i].Language < report.Grammars[j].Language })
-	coverageMatches, err := coverage.matchFilesContext(ctx, relativeFiles)
-	if err != nil {
-		return Report{}, err
-	}
-	results, err := analyzer.analyzeFiles(ctx, files, relativeFiles, fileContents, coverageMatches, changes, options)
-	if err != nil {
-		return Report{}, err
-	}
+}
+
+func appendAnalysisResults(ctx context.Context, report *Report, results []fileAnalysis, strictCoverage bool) error {
 	for _, result := range results {
 		if err := ctx.Err(); err != nil {
-			return Report{}, err
+			return err
 		}
 		report.Methods = append(report.Methods, result.methods...)
 		if result.diagnostic != nil {
 			report.Diagnostics = append(report.Diagnostics, *result.diagnostic)
-			if options.StrictCoverage && (result.diagnostic.Code == "coverage-path-unmatched" || result.diagnostic.Code == "coverage-path-ambiguous") {
-				return Report{}, fmt.Errorf("strict coverage: %s: %s", result.diagnostic.Path, result.diagnostic.Message)
+			if strictCoverage && (result.diagnostic.Code == "coverage-path-unmatched" || result.diagnostic.Code == "coverage-path-ambiguous") {
+				return fmt.Errorf("strict coverage: %s: %s", result.diagnostic.Path, result.diagnostic.Message)
 			}
 		}
 	}
+	return nil
+}
+
+func finalizeAnalysisReport(ctx context.Context, report *Report, fileCount int) error {
 	sort.Slice(report.Methods, func(i, j int) bool {
 		if report.Methods[i].File == report.Methods[j].File {
 			return report.Methods[i].StartLine < report.Methods[j].StartLine
 		}
 		return report.Methods[i].File < report.Methods[j].File
 	})
-	report.Summary = summarize(report.Methods)
 	if err := ctx.Err(); err != nil {
-		return Report{}, err
+		return err
 	}
-	report.Summary.Files = len(files)
+	report.Summary = summarize(report.Methods)
+	report.Summary.Files = fileCount
 	sort.Slice(report.Diagnostics, func(i, j int) bool {
 		if report.Diagnostics[i].Code != report.Diagnostics[j].Code {
 			return report.Diagnostics[i].Code < report.Diagnostics[j].Code
 		}
 		return report.Diagnostics[i].Path < report.Diagnostics[j].Path
 	})
-	if err := ctx.Err(); err != nil {
-		return Report{}, err
-	}
-	return report, nil
+	return ctx.Err()
 }
 
 type fileAnalysis struct {

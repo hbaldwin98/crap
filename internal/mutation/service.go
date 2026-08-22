@@ -47,6 +47,32 @@ func (service *Service) Run(ctx context.Context, options Options, output io.Writ
 }
 
 func validate(options *Options) error {
+	if err := validateRoot(options); err != nil {
+		return err
+	}
+	options.Language = strings.ToLower(options.Language)
+	if options.Language != "csharp" && options.Language != "go" && options.Language != "typescript" {
+		return fmt.Errorf("unsupported language %q", options.Language)
+	}
+	if math.IsNaN(options.MinimumScore) || math.IsInf(options.MinimumScore, 0) || options.MinimumScore < 0 || options.MinimumScore > 100 {
+		return fmt.Errorf("minimum score must be between 0 and 100")
+	}
+	if options.TimeoutSeconds == 0 {
+		options.TimeoutSeconds = 1800
+	}
+	if options.TimeoutSeconds < 1 {
+		return fmt.Errorf("timeout must be positive")
+	}
+	if err := validateMutationPaths(options); err != nil {
+		return err
+	}
+	if options.Incremental && options.Language != "typescript" {
+		return fmt.Errorf("incremental mode is only supported for TypeScript")
+	}
+	return nil
+}
+
+func validateRoot(options *Options) error {
 	if options.Root == "" {
 		root, err := os.Getwd()
 		if err != nil {
@@ -69,19 +95,10 @@ func validate(options *Options) error {
 		return fmt.Errorf("root is not a directory: %s", root)
 	}
 	options.Root = root
-	options.Language = strings.ToLower(options.Language)
-	if options.Language != "csharp" && options.Language != "go" && options.Language != "typescript" {
-		return fmt.Errorf("unsupported language %q", options.Language)
-	}
-	if math.IsNaN(options.MinimumScore) || math.IsInf(options.MinimumScore, 0) || options.MinimumScore < 0 || options.MinimumScore > 100 {
-		return fmt.Errorf("minimum score must be between 0 and 100")
-	}
-	if options.TimeoutSeconds == 0 {
-		options.TimeoutSeconds = 1800
-	}
-	if options.TimeoutSeconds < 1 {
-		return fmt.Errorf("timeout must be positive")
-	}
+	return nil
+}
+
+func validateMutationPaths(options *Options) error {
 	if options.Language == "go" {
 		if len(options.Paths) > 1 {
 			return fmt.Errorf("Gremlins accepts one package directory per run")
@@ -103,9 +120,6 @@ func validate(options *Options) error {
 				return err
 			}
 		}
-	}
-	if options.Incremental && options.Language != "typescript" {
-		return fmt.Errorf("incremental mode is only supported for TypeScript")
 	}
 	return nil
 }

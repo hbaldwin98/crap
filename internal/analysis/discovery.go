@@ -385,7 +385,7 @@ func builtInIgnoredDirectory(relative string, isDir bool) bool {
 		return false
 	}
 	base := strings.ToLower(filepath.Base(filepath.FromSlash(relative)))
-	if base == ".git" || base == "node_modules" || base == ".next" || base == "bin" || base == "obj" {
+	if base == ".git" || base == "node_modules" || base == ".next" || base == "bin" || base == "obj" || base == "testdata" {
 		return true
 	}
 	return !strings.Contains(relative, "/") && (base == "vendor" || base == "dist" || base == "build" || base == "coverage")

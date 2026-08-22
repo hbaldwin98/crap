@@ -146,36 +146,48 @@ func runMutation(options cliOptions, stdout, stderr io.Writer) int {
 	}
 	service := mutation.NewService()
 	if options.doctor {
-		report, err := service.Doctor(context.Background(), mutationOptions)
-		if err != nil {
-			fmt.Fprintf(stderr, "crap-mutate: doctor: %v\n", err)
-			return 1
-		}
-		if err := clioutput.Write(stdout, options.output, func(writer io.Writer) error {
-			return writeDoctor(writer, report, options.format)
-		}); err != nil {
-			fmt.Fprintf(stderr, "crap-mutate: write doctor report: %v\n", err)
-			return 1
-		}
-		if !report.Ready {
-			return 1
-		}
-		return 0
+		return runDoctor(service, mutationOptions, options, stdout, stderr)
 	}
 	if options.dryRun {
-		plan, err := service.Plan(mutationOptions)
-		if err != nil {
-			fmt.Fprintf(stderr, "crap-mutate: plan: %v\n", err)
-			return 1
-		}
-		if err := clioutput.Write(stdout, options.output, func(writer io.Writer) error {
-			return writePlan(writer, plan, options.format)
-		}); err != nil {
-			fmt.Fprintf(stderr, "crap-mutate: write plan: %v\n", err)
-			return 1
-		}
-		return 0
+		return runPlan(service, mutationOptions, options, stdout, stderr)
 	}
+	return executeMutation(service, mutationOptions, options, root, stdout, stderr)
+}
+
+func runDoctor(service *mutation.Service, mutationOptions mutation.Options, options cliOptions, stdout, stderr io.Writer) int {
+	report, err := service.Doctor(context.Background(), mutationOptions)
+	if err != nil {
+		fmt.Fprintf(stderr, "crap-mutate: doctor: %v\n", err)
+		return 1
+	}
+	if err := clioutput.Write(stdout, options.output, func(writer io.Writer) error {
+		return writeDoctor(writer, report, options.format)
+	}); err != nil {
+		fmt.Fprintf(stderr, "crap-mutate: write doctor report: %v\n", err)
+		return 1
+	}
+	if !report.Ready {
+		return 1
+	}
+	return 0
+}
+
+func runPlan(service *mutation.Service, mutationOptions mutation.Options, options cliOptions, stdout, stderr io.Writer) int {
+	plan, err := service.Plan(mutationOptions)
+	if err != nil {
+		fmt.Fprintf(stderr, "crap-mutate: plan: %v\n", err)
+		return 1
+	}
+	if err := clioutput.Write(stdout, options.output, func(writer io.Writer) error {
+		return writePlan(writer, plan, options.format)
+	}); err != nil {
+		fmt.Fprintf(stderr, "crap-mutate: write plan: %v\n", err)
+		return 1
+	}
+	return 0
+}
+
+func executeMutation(service *mutation.Service, mutationOptions mutation.Options, options cliOptions, root string, stdout, stderr io.Writer) int {
 	report, err := service.Run(context.Background(), mutationOptions, stderr)
 	if err != nil {
 		fmt.Fprintf(stderr, "crap-mutate: %v\n", err)

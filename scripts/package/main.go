@@ -35,6 +35,41 @@ func main() {
 }
 
 func run(version, revision, output string) error {
+	if err := validateRelease(version, revision); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(output, 0o755); err != nil {
+		return fmt.Errorf("create output directory: %w", err)
+	}
+	work, err := os.MkdirTemp("", "crap-release-")
+	if err != nil {
+		return fmt.Errorf("create temporary directory: %w", err)
+	}
+	defer os.RemoveAll(work)
+
+	files, packages, err := buildReleaseExecutables(work, version, revision)
+	if err != nil {
+		return err
+	}
+	licenseFiles, err := stageLicenses(work, packages)
+	if err != nil {
+		return err
+	}
+	files = append(files, licenseFiles...)
+
+	base := fmt.Sprintf("crap_v%s_%s_%s", version, runtime.GOOS, runtime.GOARCH)
+	archive := filepath.Join(output, base+".tar.gz")
+	if runtime.GOOS == "windows" {
+		archive = filepath.Join(output, base+".zip")
+	}
+	if err := writeArchive(archive, work, files); err != nil {
+		return err
+	}
+	fmt.Println(archive)
+	return nil
+}
+
+func validateRelease(version, revision string) error {
 	if version == "" || revision == "" {
 		return fmt.Errorf("version and revision are required")
 	}
@@ -50,16 +85,10 @@ func run(version, revision, output string) error {
 	if runtime.GOARCH != "amd64" && runtime.GOARCH != "arm64" {
 		return fmt.Errorf("unsupported native architecture %s", runtime.GOARCH)
 	}
+	return nil
+}
 
-	if err := os.MkdirAll(output, 0o755); err != nil {
-		return fmt.Errorf("create output directory: %w", err)
-	}
-	work, err := os.MkdirTemp("", "crap-release-")
-	if err != nil {
-		return fmt.Errorf("create temporary directory: %w", err)
-	}
-	defer os.RemoveAll(work)
-
+func buildReleaseExecutables(work, version, revision string) ([]string, []string, error) {
 	extension := ""
 	if runtime.GOOS == "windows" {
 		extension = ".exe"
@@ -79,33 +108,18 @@ func run(version, revision, output string) error {
 		command.Stderr = os.Stderr
 		command.Env = append(os.Environ(), "CGO_ENABLED=1")
 		if err := command.Run(); err != nil {
-			return fmt.Errorf("build %s: %w", name, err)
+			return nil, nil, fmt.Errorf("build %s: %w", name, err)
 		}
 		versionCommand := exec.Command(destination, "--version")
 		actual, err := versionCommand.Output()
 		if err != nil {
-			return fmt.Errorf("check %s version: %w", name, err)
+			return nil, nil, fmt.Errorf("check %s version: %w", name, err)
 		}
 		if strings.TrimSpace(string(actual)) != version {
-			return fmt.Errorf("%s reports version %q", name, strings.TrimSpace(string(actual)))
+			return nil, nil, fmt.Errorf("%s reports version %q", name, strings.TrimSpace(string(actual)))
 		}
 	}
-	licenseFiles, err := stageLicenses(work, packages)
-	if err != nil {
-		return err
-	}
-	files = append(files, licenseFiles...)
-
-	base := fmt.Sprintf("crap_v%s_%s_%s", version, runtime.GOOS, runtime.GOARCH)
-	archive := filepath.Join(output, base+".tar.gz")
-	if runtime.GOOS == "windows" {
-		archive = filepath.Join(output, base+".zip")
-	}
-	if err := writeArchive(archive, work, files); err != nil {
-		return err
-	}
-	fmt.Println(archive)
-	return nil
+	return files, packages, nil
 }
 
 type listedPackage struct {
