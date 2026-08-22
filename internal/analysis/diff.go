@@ -30,6 +30,14 @@ type changedFiles struct {
 	Files          map[string][]lineRange
 }
 
+type gitChangeRequest struct {
+	repositoryRoot string
+	baseCommit     string
+	headCommit     string
+	mergeBase      string
+	pathspecs      []string
+}
+
 type gitRunner interface {
 	Output(context.Context, string, ...string) ([]byte, error)
 }
@@ -63,64 +71,88 @@ func gitChangedLinesContext(ctx context.Context, root, base string, sourceFiles 
 	if base == "" {
 		return changedFiles{}, nil
 	}
+	request, err := prepareGitChangeRequest(ctx, root, base, sourceFiles, runner, authorization...)
+	if err != nil {
+		return changedFiles{}, err
+	}
+	files, err := collectGitChanges(ctx, request, runner)
+	if err != nil {
+		return changedFiles{}, err
+	}
+	return changedFiles{
+		RepositoryRoot: request.repositoryRoot,
+		BaseCommit:     request.baseCommit,
+		HeadCommit:     request.headCommit,
+		MergeBase:      request.mergeBase,
+		Files:          files,
+	}, nil
+}
+
+func prepareGitChangeRequest(ctx context.Context, root, base string, sourceFiles []string, runner gitRunner, authorization ...*rootauth.Root) (gitChangeRequest, error) {
 	repositoryRoot, err := gitValue(ctx, runner, root, "rev-parse", "--show-toplevel")
 	if err != nil {
-		return changedFiles{}, fmt.Errorf("discover Git repository from %s: %w", root, err)
+		return gitChangeRequest{}, fmt.Errorf("discover Git repository from %s: %w", root, err)
 	}
 	repositoryRoot, err = filepath.Abs(repositoryRoot)
 	if err != nil {
-		return changedFiles{}, fmt.Errorf("resolve Git repository root: %w", err)
+		return gitChangeRequest{}, fmt.Errorf("resolve Git repository root: %w", err)
 	}
 	repositoryRoot, err = filepath.EvalSymlinks(repositoryRoot)
 	if err != nil {
-		return changedFiles{}, fmt.Errorf("resolve Git repository root links: %w", err)
+		return gitChangeRequest{}, fmt.Errorf("resolve Git repository root links: %w", err)
 	}
 	if len(authorization) > 0 && authorization[0] != nil {
 		repositoryRoot, err = authorization[0].Existing(repositoryRoot)
 		if err != nil {
-			return changedFiles{}, fmt.Errorf("authorize Git repository: %w", err)
+			return gitChangeRequest{}, fmt.Errorf("authorize Git repository: %w", err)
 		}
 	}
 	baseCommit, err := gitValue(ctx, runner, repositoryRoot, "rev-parse", "--verify", "--end-of-options", base+"^{commit}")
 	if err != nil {
-		return changedFiles{}, fmt.Errorf("resolve diff base %q as a commit: %w", base, err)
+		return gitChangeRequest{}, fmt.Errorf("resolve diff base %q as a commit: %w", base, err)
 	}
 	headCommit, err := gitValue(ctx, runner, repositoryRoot, "rev-parse", "--verify", "--end-of-options", "HEAD^{commit}")
 	if err != nil {
-		return changedFiles{}, fmt.Errorf("resolve HEAD as a commit: %w", err)
+		return gitChangeRequest{}, fmt.Errorf("resolve HEAD as a commit: %w", err)
 	}
 	mergeBase, err := gitValue(ctx, runner, repositoryRoot, "merge-base", baseCommit, headCommit)
 	if err != nil {
-		return changedFiles{}, fmt.Errorf("find merge base between %s and %s: %w", baseCommit, headCommit, err)
+		return gitChangeRequest{}, fmt.Errorf("find merge base between %s and %s: %w", baseCommit, headCommit, err)
 	}
+	pathspecs, err := canonicalGitPathspecs(repositoryRoot, sourceFiles)
+	if err != nil {
+		return gitChangeRequest{}, err
+	}
+	return gitChangeRequest{repositoryRoot, baseCommit, headCommit, mergeBase, pathspecs}, nil
+}
+
+func canonicalGitPathspecs(repositoryRoot string, sourceFiles []string) ([]string, error) {
 	canonicalSources := make([]string, len(sourceFiles))
 	for index, sourceFile := range sourceFiles {
-		canonicalSources[index], err = filepath.EvalSymlinks(sourceFile)
+		canonical, err := filepath.EvalSymlinks(sourceFile)
 		if err != nil {
-			return changedFiles{}, fmt.Errorf("resolve source %s for Git: %w", sourceFile, err)
+			return nil, fmt.Errorf("resolve source %s for Git: %w", sourceFile, err)
 		}
+		canonicalSources[index] = canonical
 	}
-	pathspecs, err := gitSourcePathspecs(repositoryRoot, canonicalSources)
-	if err != nil {
-		return changedFiles{}, err
-	}
+	return gitSourcePathspecs(repositoryRoot, canonicalSources)
+}
+
+func collectGitChanges(ctx context.Context, request gitChangeRequest, runner gitRunner) (map[string][]lineRange, error) {
 	files := make(map[string][]lineRange)
-	if len(pathspecs) == 0 {
-		return changedFiles{RepositoryRoot: repositoryRoot, BaseCommit: baseCommit, HeadCommit: headCommit, MergeBase: mergeBase, Files: files}, nil
-	}
-	for _, batch := range batchPathspecs(pathspecs) {
+	for _, batch := range batchPathspecs(request.pathspecs) {
 		if err := ctx.Err(); err != nil {
-			return changedFiles{}, err
+			return nil, err
 		}
-		diffArgs := []string{"diff", "--no-ext-diff", "--no-textconv", "--no-renames", "--src-prefix=a/", "--dst-prefix=b/", "--unified=0", "--no-color", mergeBase, "--"}
+		diffArgs := []string{"diff", "--no-ext-diff", "--no-textconv", "--no-renames", "--src-prefix=a/", "--dst-prefix=b/", "--unified=0", "--no-color", request.mergeBase, "--"}
 		diffArgs = append(diffArgs, batch...)
-		output, err := runner.Output(ctx, repositoryRoot, diffArgs...)
+		output, err := runner.Output(ctx, request.repositoryRoot, diffArgs...)
 		if err != nil {
-			return changedFiles{}, fmt.Errorf("diff from merge base %s: %w", mergeBase, err)
+			return nil, fmt.Errorf("diff from merge base %s: %w", request.mergeBase, err)
 		}
 		parsed, err := parseDiffContext(ctx, string(output))
 		if err != nil {
-			return changedFiles{}, fmt.Errorf("parse Git diff: %w", err)
+			return nil, fmt.Errorf("parse Git diff: %w", err)
 		}
 		for filename, ranges := range parsed {
 			files[filename] = mergeRanges(append(files[filename], ranges...))
@@ -129,21 +161,15 @@ func gitChangedLinesContext(ctx context.Context, root, base string, sourceFiles 
 		// untracked source so explicitly requested ignored files remain changed.
 		untrackedArgs := []string{"ls-files", "-z", "--others", "--"}
 		untrackedArgs = append(untrackedArgs, batch...)
-		untracked, err := runner.Output(ctx, repositoryRoot, untrackedArgs...)
+		untracked, err := runner.Output(ctx, request.repositoryRoot, untrackedArgs...)
 		if err != nil {
-			return changedFiles{}, fmt.Errorf("list untracked source files: %w", err)
+			return nil, fmt.Errorf("list untracked source files: %w", err)
 		}
-		if err := addUntrackedFilesContext(ctx, files, repositoryRoot, untracked); err != nil {
-			return changedFiles{}, err
+		if err := addUntrackedFilesContext(ctx, files, request.repositoryRoot, untracked); err != nil {
+			return nil, err
 		}
 	}
-	return changedFiles{
-		RepositoryRoot: repositoryRoot,
-		BaseCommit:     baseCommit,
-		HeadCommit:     headCommit,
-		MergeBase:      mergeBase,
-		Files:          files,
-	}, nil
+	return files, nil
 }
 
 const (

@@ -89,7 +89,11 @@ func TestParallelAnalysisIsDeterministicAndSelectsLowestFileError(t *testing.T) 
 		}
 	}
 	_, err = analyzer.Analyze(Options{Root: root, Paths: []string{"."}, CRAPThreshold: 30})
-	if err == nil || !strings.Contains(err.Error(), filepath.Join(root, "a.go")) {
+	canonicalRoot, canonicalErr := filepath.EvalSymlinks(root)
+	if canonicalErr != nil {
+		t.Fatal(canonicalErr)
+	}
+	if err == nil || !strings.Contains(err.Error(), filepath.Join(canonicalRoot, "a.go")) {
 		t.Fatalf("error = %v, want lowest sorted file", err)
 	}
 }

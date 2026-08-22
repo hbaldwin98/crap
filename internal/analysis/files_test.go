@@ -212,9 +212,13 @@ func TestFindSourceFilesUsesParentAndNestedGitignoreWithoutScanningUnrelatedTree
 
 func relativePaths(t *testing.T, root string, files []string) []string {
 	t.Helper()
+	canonicalRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
 	result := make([]string, len(files))
 	for index, file := range files {
-		relative, err := filepath.Rel(root, file)
+		relative, err := filepath.Rel(canonicalRoot, file)
 		if err != nil {
 			t.Fatal(err)
 		}
