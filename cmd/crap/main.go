@@ -82,6 +82,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 	if len(args) > 0 && args[0] == "graph" {
 		return runGraph(args[1:], stdout, stderr)
 	}
+	if len(args) > 0 && args[0] == "arch" {
+		return runArchitecture(args[1:], stdout, stderr)
+	}
 	options, ok := parseOptionsWithHelp(args, stdout, stderr)
 	if !ok {
 		return 1
@@ -550,6 +553,7 @@ func writeUsage(writer io.Writer, flags *flag.FlagSet) {
 	fmt.Fprintln(writer, "       crap scope actual --diff-base REVISION [options] [path ...]")
 	fmt.Fprintln(writer, "       crap compare --base REVISION [options] [path ...]")
 	fmt.Fprintln(writer, "       crap graph [options] [path ...]")
+	fmt.Fprintln(writer, "       crap arch [options] [path ...]")
 	fmt.Fprintln(writer, "       crap mcp")
 	fmt.Fprintln(writer, "Deterministically calculate cyclomatic complexity and CRAP scores for C#, Go, and TypeScript callables.")
 	flags.PrintDefaults()
