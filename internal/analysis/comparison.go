@@ -11,6 +11,7 @@ import (
 
 	"github.com/hbaldwin98/crap/internal/buildinfo"
 	"github.com/hbaldwin98/crap/internal/reportcontract"
+	"github.com/hbaldwin98/crap/internal/rootauth"
 )
 
 const ChangeScopeComparisonSchemaVersion = "1"
@@ -101,46 +102,62 @@ func (analyzer *Analyzer) CompareChangeScope(options ComparisonOptions) (ChangeS
 }
 
 func (analyzer *Analyzer) CompareChangeScopeContext(ctx context.Context, options ComparisonOptions) (ChangeScopeComparisonReport, error) {
-	if strings.TrimSpace(options.BaseRevision) == "" {
-		return ChangeScopeComparisonReport{}, fmt.Errorf("base revision is required")
+	if err := validateComparisonOptions(options); err != nil {
+		return ChangeScopeComparisonReport{}, err
 	}
-	if options.Analysis.DiffBase != "" {
-		return ChangeScopeComparisonReport{}, fmt.Errorf("comparison does not accept an analysis diff base")
-	}
-	root, err := canonicalAnalysisRoot(options.Analysis.Root, options.Analysis.Authorization)
+	root, revision, baselineSnapshot, err := analyzer.prepareComparisonBaseline(ctx, options)
 	if err != nil {
 		return ChangeScopeComparisonReport{}, err
 	}
-	revision, err := prepareGitChangeRequest(ctx, root, options.BaseRevision, nil, analyzer.git, options.Analysis.Authorization)
-	if err != nil {
-		return ChangeScopeComparisonReport{}, err
-	}
-	baselineSnapshot, err := analyzer.readGitSourceSnapshot(ctx, root, revision.repositoryRoot, revision.mergeBase, options.Analysis)
-	if err != nil {
-		return ChangeScopeComparisonReport{}, err
-	}
-	currentOptions := options.Analysis
-	currentOptions.Root = root
-	currentOptions.DiffBase = ""
-	currentOptions = comparisonCurrentOptions(root, currentOptions)
-	current, currentInputs, err := analyzer.analyzeContext(ctx, currentOptions)
-	if err != nil {
-		return ChangeScopeComparisonReport{}, err
-	}
-	baselineCoverage, baselineCoverageMetadata, err := loadComparisonCoverage(ctx, root, options.BaseCoveragePath, options.Analysis.Authorization)
-	if err != nil {
-		return ChangeScopeComparisonReport{}, fmt.Errorf("load baseline coverage: %w", err)
-	}
-	baseline, err := analyzer.analyzeGitSnapshot(ctx, root, baselineSnapshot, baselineCoverage, baselineCoverageMetadata, options.Analysis)
+	baseline, current, currentSources, err := analyzer.analyzeComparisonRevisions(ctx, root, baselineSnapshot, options)
 	if err != nil {
 		return ChangeScopeComparisonReport{}, err
 	}
 	report := newComparisonReport(root, options, revision, baseline, current)
-	report.Callables, report.Summary = compareCallables(ctx, baseline, current, options.Analysis.CRAPThreshold, snapshotContents(baselineSnapshot), currentInputs.sources)
+	report.Callables, report.Summary = compareCallables(ctx, baseline, current, options.Analysis.CRAPThreshold, snapshotContents(baselineSnapshot), currentSources)
 	if err := ctx.Err(); err != nil {
 		return ChangeScopeComparisonReport{}, err
 	}
 	return report, nil
+}
+
+func validateComparisonOptions(options ComparisonOptions) error {
+	if strings.TrimSpace(options.BaseRevision) == "" {
+		return fmt.Errorf("base revision is required")
+	}
+	if options.Analysis.DiffBase != "" {
+		return fmt.Errorf("comparison does not accept an analysis diff base")
+	}
+	return nil
+}
+
+func (analyzer *Analyzer) prepareComparisonBaseline(ctx context.Context, options ComparisonOptions) (string, gitChangeRequest, gitSourceSnapshot, error) {
+	root, err := canonicalAnalysisRoot(options.Analysis.Root, options.Analysis.Authorization)
+	if err != nil {
+		return "", gitChangeRequest{}, gitSourceSnapshot{}, err
+	}
+	revision, err := prepareGitChangeRequest(ctx, root, options.BaseRevision, nil, analyzer.git, options.Analysis.Authorization)
+	if err != nil {
+		return "", gitChangeRequest{}, gitSourceSnapshot{}, err
+	}
+	baseline, err := analyzer.readGitSourceSnapshot(ctx, root, revision.repositoryRoot, revision.mergeBase, options.Analysis)
+	return root, revision, baseline, err
+}
+
+func (analyzer *Analyzer) analyzeComparisonRevisions(ctx context.Context, root string, snapshot gitSourceSnapshot, options ComparisonOptions) (Report, Report, map[string][]byte, error) {
+	currentOptions := comparisonCurrentOptions(root, options.Analysis)
+	currentOptions.Root = root
+	currentOptions.DiffBase = ""
+	current, currentInputs, err := analyzer.analyzeContext(ctx, currentOptions)
+	if err != nil {
+		return Report{}, Report{}, nil, err
+	}
+	coverage, metadata, err := loadComparisonCoverage(ctx, root, options.BaseCoveragePath, options.Analysis.Authorization)
+	if err != nil {
+		return Report{}, Report{}, nil, fmt.Errorf("load baseline coverage: %w", err)
+	}
+	baseline, err := analyzer.analyzeGitSnapshot(ctx, root, snapshot, coverage, metadata, options.Analysis)
+	return baseline, current, currentInputs.sources, err
 }
 
 func newComparisonReport(root string, options ComparisonOptions, revision gitChangeRequest, baseline, current Report) ChangeScopeComparisonReport {
@@ -234,6 +251,19 @@ func compareCallables(ctx context.Context, baseline, current Report, threshold f
 	baseUsed := make([]bool, len(base))
 	nowUsed := make([]bool, len(now))
 	comparisons := make([]CallableComparison, 0, len(base)+len(now))
+	comparisons = append(comparisons, matchCallablesByID(base, now, baseUsed, nowUsed, threshold, baseline.Coverage.Format == current.Coverage.Format)...)
+	declarationMatches, canceled := matchCallablesByDeclaration(ctx, base, now, baseUsed, nowUsed, threshold, baseline.Coverage.Format == current.Coverage.Format)
+	if canceled {
+		return nil, ComparisonSummary{}
+	}
+	comparisons = append(comparisons, declarationMatches...)
+	comparisons = append(comparisons, unmatchedCallables(base, now, baseUsed, nowUsed, threshold)...)
+	sort.Slice(comparisons, func(i, j int) bool { return comparisons[i].ID < comparisons[j].ID })
+	return comparisons, summarizeComparisons(comparisons)
+}
+
+func matchCallablesByID(base, now []ComparedCallable, baseUsed, nowUsed []bool, threshold float64, sameCoverageFormat bool) []CallableComparison {
+	comparisons := make([]CallableComparison, 0)
 	baseIDs, nowIDs := callableIndexes(base, func(callable ComparedCallable) string { return callable.Method.ID }), callableIndexes(now, func(callable ComparedCallable) string { return callable.Method.ID })
 	allBaseDeclarations, allNowDeclarations := callableIndexes(base, declarationMatchKey), callableIndexes(now, declarationMatchKey)
 	for _, key := range sharedUniqueKeys(baseIDs, nowIDs) {
@@ -243,30 +273,41 @@ func compareCallables(ctx context.Context, baseline, current Report, threshold f
 			continue
 		}
 		baseUsed[left], nowUsed[right] = true, true
-		comparisons = append(comparisons, matchedComparison(base[left], now[right], "id", threshold, baseline.Coverage.Format == current.Coverage.Format))
+		comparisons = append(comparisons, matchedComparison(base[left], now[right], "id", threshold, sameCoverageFormat))
 	}
+	return comparisons
+}
+
+func matchCallablesByDeclaration(ctx context.Context, base, now []ComparedCallable, baseUsed, nowUsed []bool, threshold float64, sameCoverageFormat bool) ([]CallableComparison, bool) {
+	comparisons := make([]CallableComparison, 0)
 	baseDeclarations := callableIndexesRemaining(base, baseUsed, declarationMatchKey)
 	nowDeclarations := callableIndexesRemaining(now, nowUsed, declarationMatchKey)
-	keys := sharedKeys(baseDeclarations, nowDeclarations)
-	for _, key := range keys {
+	for _, key := range sharedKeys(baseDeclarations, nowDeclarations) {
 		if ctx.Err() != nil {
-			return nil, ComparisonSummary{}
+			return nil, true
 		}
 		left, right := baseDeclarations[key], nowDeclarations[key]
 		if len(left) == 1 && len(right) == 1 {
 			baseUsed[left[0]], nowUsed[right[0]] = true, true
-			comparisons = append(comparisons, matchedComparison(base[left[0]], now[right[0]], "declaration", threshold, baseline.Coverage.Format == current.Coverage.Format))
+			comparisons = append(comparisons, matchedComparison(base[left[0]], now[right[0]], "declaration", threshold, sameCoverageFormat))
 			continue
 		}
 		baselineCandidates, currentCandidates := selectCompared(base, left), selectCompared(now, right)
-		for _, index := range left {
-			baseUsed[index] = true
-		}
-		for _, index := range right {
-			nowUsed[index] = true
-		}
+		markComparedUsed(baseUsed, left)
+		markComparedUsed(nowUsed, right)
 		comparisons = append(comparisons, unmatchedComparison("ambiguous", baselineCandidates, currentCandidates))
 	}
+	return comparisons, false
+}
+
+func markComparedUsed(used []bool, indexes []int) {
+	for _, index := range indexes {
+		used[index] = true
+	}
+}
+
+func unmatchedCallables(base, now []ComparedCallable, baseUsed, nowUsed []bool, threshold float64) []CallableComparison {
+	comparisons := make([]CallableComparison, 0)
 	for index, callable := range base {
 		if !baseUsed[index] {
 			comparisons = append(comparisons, unmatchedComparison("removed", []ComparedCallable{callable}, nil))
@@ -282,7 +323,10 @@ func compareCallables(ctx context.Context, baseline, current Report, threshold f
 			comparisons = append(comparisons, comparison)
 		}
 	}
-	sort.Slice(comparisons, func(i, j int) bool { return comparisons[i].ID < comparisons[j].ID })
+	return comparisons
+}
+
+func summarizeComparisons(comparisons []CallableComparison) ComparisonSummary {
 	summary := ComparisonSummary{Complete: true}
 	for _, comparison := range comparisons {
 		switch comparison.Status {
@@ -300,7 +344,7 @@ func compareCallables(ctx context.Context, baseline, current Report, threshold f
 			summary.NewRegressions++
 		}
 	}
-	return comparisons, summary
+	return summary
 }
 
 func comparedCallables(report Report, content map[string][]byte) []ComparedCallable {
@@ -329,7 +373,31 @@ func comparedCallables(report Report, content map[string][]byte) []ComparedCalla
 	return result
 }
 
-func matchedComparison(baseline, current ComparedCallable, strategy string, threshold float64, sameCoverageFormat bool) CallableComparison {
+func matchedComparison(baseline, current ComparedCallable, strategy string, _ float64, sameCoverageFormat bool) CallableComparison {
+	delta := matchedCallableDelta(baseline, current, sameCoverageFormat)
+	newRegression := delta.ScoreComparable && !baseline.Method.AboveThreshold && current.Method.AboveThreshold
+	reasons := make([]string, 0, 3)
+	if current.Method.Complexity > baseline.Method.Complexity {
+		reasons = append(reasons, "complexity-increased")
+	}
+	if delta.CoveragePercent != nil && *delta.CoveragePercent < 0 {
+		reasons = append(reasons, "coverage-decreased")
+	}
+	if delta.CRAP != nil && *delta.CRAP > 0 {
+		reasons = append(reasons, "crap-increased")
+	}
+	if newRegression {
+		reasons = append(reasons, "threshold-crossed")
+	}
+	return CallableComparison{
+		ID: comparisonID("matched", []ComparedCallable{baseline}, []ComparedCallable{current}), Status: "matched", MatchStrategy: strategy, Change: matchedCallableChange(baseline, current, delta.CoveragePercent),
+		Baseline: []ComparedCallable{baseline}, Current: []ComparedCallable{current},
+		Delta:         &delta,
+		NewRegression: newRegression, Reasons: reasons,
+	}
+}
+
+func matchedCallableDelta(baseline, current ComparedCallable, sameCoverageFormat bool) CallableDelta {
 	coverageDelta := nullableDelta(baseline.Method.CoveragePercent, current.Method.CoveragePercent)
 	comparable := sameCoverageFormat && ((baseline.CoverageState == "measured" && current.CoverageState == "measured") || (baseline.CoverageState == "absent" && current.CoverageState == "absent"))
 	if !sameCoverageFormat {
@@ -340,36 +408,22 @@ func matchedComparison(baseline, current ComparedCallable, strategy string, thre
 		value := round(current.Method.CRAP-baseline.Method.CRAP, 2)
 		crapDelta = &value
 	}
-	change := "unchanged"
+	return CallableDelta{Complexity: current.Method.Complexity - baseline.Method.Complexity, CoveragePercent: coverageDelta, CRAP: crapDelta, ScoreComparable: comparable}
+}
+
+func matchedCallableChange(baseline, current ComparedCallable, coverageDelta *float64) string {
 	moved := baseline.Method.File != current.Method.File
 	modified := baseline.ContentSHA256 != current.ContentSHA256 || baseline.Method.Complexity != current.Method.Complexity || baseline.Method.CRAP != current.Method.CRAP || coverageDeltaValue(coverageDelta) != 0 || baseline.Method.Signature != current.Method.Signature
 	if moved && modified {
-		change = "moved-modified"
-	} else if moved {
-		change = "moved"
-	} else if modified {
-		change = "modified"
+		return "moved-modified"
 	}
-	reasons := make([]string, 0, 3)
-	if current.Method.Complexity > baseline.Method.Complexity {
-		reasons = append(reasons, "complexity-increased")
+	if moved {
+		return "moved"
 	}
-	if coverageDelta != nil && *coverageDelta < 0 {
-		reasons = append(reasons, "coverage-decreased")
+	if modified {
+		return "modified"
 	}
-	if crapDelta != nil && *crapDelta > 0 {
-		reasons = append(reasons, "crap-increased")
-	}
-	newRegression := comparable && !baseline.Method.AboveThreshold && current.Method.AboveThreshold
-	if newRegression {
-		reasons = append(reasons, "threshold-crossed")
-	}
-	return CallableComparison{
-		ID: comparisonID("matched", []ComparedCallable{baseline}, []ComparedCallable{current}), Status: "matched", MatchStrategy: strategy, Change: change,
-		Baseline: []ComparedCallable{baseline}, Current: []ComparedCallable{current},
-		Delta:         &CallableDelta{Complexity: current.Method.Complexity - baseline.Method.Complexity, CoveragePercent: coverageDelta, CRAP: crapDelta, ScoreComparable: comparable},
-		NewRegression: newRegression, Reasons: reasons,
-	}
+	return "unchanged"
 }
 
 func unmatchedComparison(status string, baseline, current []ComparedCallable) CallableComparison {
@@ -525,7 +579,7 @@ func sourceCoordinateOffset(data []byte, line, column int) (int, bool) {
 	return offset, offset >= start && offset <= end
 }
 
-func loadComparisonCoverage(ctx context.Context, root, value string, authorization interface{ Existing(string) (string, error) }) (coverageData, CoverageMetadata, error) {
+func loadComparisonCoverage(ctx context.Context, root, value string, authorization *rootauth.Root) (coverageData, CoverageMetadata, error) {
 	path := value
 	if path != "" && !filepath.IsAbs(path) {
 		path = filepath.Join(root, path)

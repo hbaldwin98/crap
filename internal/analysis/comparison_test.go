@@ -11,7 +11,48 @@ import (
 
 	"github.com/go-git/go-git/v5/plumbing/format/gitignore"
 	"github.com/hbaldwin98/crap/internal/reportcontract"
+	"github.com/hbaldwin98/crap/internal/rootauth"
 )
+
+func TestLoadComparisonCoverageAcceptsNilAuthorization(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "coverage.out"), []byte("mode: set\nsample.go:1.1,1.2 1 1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var authorization *rootauth.Root
+	coverage, metadata, err := loadComparisonCoverage(context.Background(), root, "coverage.out", authorization)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !coverage.loaded || metadata.Format != "go-coverprofile" {
+		t.Fatalf("coverage = %#v, metadata = %#v", coverage, metadata)
+	}
+}
+
+func TestCompareChangeScopeValidatesComparisonOnlyOptionsBeforeGit(t *testing.T) {
+	analyzer, err := NewAnalyzer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer analyzer.Close()
+
+	tests := []struct {
+		name    string
+		options ComparisonOptions
+		want    string
+	}{
+		{name: "missing base", options: ComparisonOptions{Analysis: Options{Root: t.TempDir()}}, want: "base revision is required"},
+		{name: "analysis diff base", options: ComparisonOptions{BaseRevision: "HEAD", Analysis: Options{Root: t.TempDir(), DiffBase: "main"}}, want: "comparison does not accept an analysis diff base"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := analyzer.CompareChangeScopeContext(t.Context(), test.options)
+			if err == nil || err.Error() != test.want {
+				t.Fatalf("error = %v, want %q", err, test.want)
+			}
+		})
+	}
+}
 
 func TestCompareChangeScopeReadsBaselineBlobsWithoutChangingWorktree(t *testing.T) {
 	root := t.TempDir()
@@ -282,6 +323,28 @@ func TestMatchedComparisonRequiresCompatibleCoverageEvidence(t *testing.T) {
 				t.Fatalf("CRAP delta = %v", comparison.Delta.CRAP)
 			}
 		})
+	}
+}
+
+func TestMatchedComparisonDoesNotReportQualityImprovementsAsRegressionReasons(t *testing.T) {
+	baselineCoverage, currentCoverage := 50.0, 75.0
+	baseline := ComparedCallable{
+		Method:        MethodResult{ID: strings.Repeat("a", 64), File: "work.go", Signature: "func Work()", Complexity: 5, CoveragePercent: &baselineCoverage, CRAP: 20, AboveThreshold: true},
+		CoverageState: "measured",
+		ContentSHA256: strings.Repeat("1", 64),
+	}
+	current := baseline
+	current.Method.Complexity = 4
+	current.Method.CoveragePercent = &currentCoverage
+	current.Method.CRAP = 10
+	current.Method.AboveThreshold = false
+
+	comparison := matchedComparison(baseline, current, "id", 30, true)
+	if comparison.Change != "modified" || comparison.NewRegression || len(comparison.Reasons) != 0 {
+		t.Fatalf("comparison = %#v", comparison)
+	}
+	if comparison.Delta == nil || comparison.Delta.Complexity != -1 || comparison.Delta.CoveragePercent == nil || *comparison.Delta.CoveragePercent != 25 || comparison.Delta.CRAP == nil || *comparison.Delta.CRAP != -10 {
+		t.Fatalf("delta = %#v", comparison.Delta)
 	}
 }
 
