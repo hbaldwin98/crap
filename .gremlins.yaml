@@ -1,3 +1,4 @@
 unleash:
   timeout-coefficient: 20
-  workers: 4
+  workers: 1
+  test-cpu: 1

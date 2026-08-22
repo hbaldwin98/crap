@@ -1,0 +1,12 @@
+{
+  "pageSchemaVersion": "1", "reportId": "11111111111111111111111111111111", "expiresAt": "2026-08-21T12:00:00Z",
+  "neighborhood": {
+    "schemaVersion": "1", "reportType": "code-graph-neighborhood", "seedNodeIds": ["2222222222222222222222222222222222222222222222222222222222222222"], "direction": "outgoing", "depth": 1, "edgeTypes": ["contains"],
+    "summary": {"seedNodes": 1, "nodes": 2, "edges": 1, "references": 0, "truncated": false, "omittedNodes": 0, "omittedEdges": 0},
+    "nodes": [
+      {"node": {"id": "2222222222222222222222222222222222222222222222222222222222222222", "kind": "file", "language": "go", "name": "work.go", "path": "src/work.go", "location": null, "metrics": null}, "distance": 0},
+      {"node": {"id": "3333333333333333333333333333333333333333333333333333333333333333", "kind": "type", "language": "go", "name": "work.Job", "path": "src/work.go", "declarationKind": "type", "location": {"startLine": 2, "startColumn": 1, "endLine": 2, "endColumn": 18}, "metrics": null}, "distance": 1}
+    ],
+    "edges": [{"id": "5555555555555555555555555555555555555555555555555555555555555555", "type": "contains", "from": "2222222222222222222222222222222222222222222222222222222222222222", "to": "3333333333333333333333333333333333333333333333333333333333333333", "resolution": "exact", "evidence": "lexical-ast", "occurrences": 1, "references": []}], "references": []
+  }
+}

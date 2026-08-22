@@ -52,6 +52,19 @@ type compareCLIOptions struct {
 	showHelp         bool
 }
 
+type graphCLIOptions struct {
+	paths            []string
+	format           string
+	output           string
+	coverage         string
+	threshold        float64
+	includeTests     bool
+	includeGenerated bool
+	excludes         stringList
+	strictCoverage   bool
+	showHelp         bool
+}
+
 func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
 }
@@ -66,6 +79,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 	if len(args) > 0 && args[0] == "compare" {
 		return runComparison(args[1:], stdout, stderr)
 	}
+	if len(args) > 0 && args[0] == "graph" {
+		return runGraph(args[1:], stdout, stderr)
+	}
 	options, ok := parseOptionsWithHelp(args, stdout, stderr)
 	if !ok {
 		return 1
@@ -78,6 +94,172 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 0
 	}
 	return runAnalysis(options, stdout, stderr)
+}
+
+func runGraph(args []string, stdout, stderr io.Writer) int {
+	options, ok := parseGraphOptions(args, stdout, stderr)
+	if !ok {
+		return 1
+	}
+	if options.showHelp {
+		return 0
+	}
+	if options.output != "" {
+		if err := clioutput.Validate(options.output); err != nil {
+			fmt.Fprintf(stderr, "crap: invalid output path: %v\n", err)
+			return 1
+		}
+	}
+	root, err := os.Getwd()
+	if err != nil {
+		fmt.Fprintf(stderr, "crap: determine working directory: %v\n", err)
+		return 1
+	}
+	analyzer, err := analysis.NewAnalyzer()
+	if err != nil {
+		fmt.Fprintf(stderr, "crap: %v\n", err)
+		return 1
+	}
+	defer analyzer.Close()
+	report, err := analyzer.AnalyzeCodeGraph(analysis.CodeGraphOptions{
+		Root: root, Paths: options.paths, CoveragePath: options.coverage, CRAPThreshold: options.threshold,
+		IncludeTests: options.includeTests, IncludeGenerated: options.includeGenerated, Exclude: options.excludes, StrictCoverage: options.strictCoverage,
+	})
+	if err != nil {
+		fmt.Fprintf(stderr, "crap: %v\n", err)
+		return 1
+	}
+	if err := clioutput.Write(stdout, options.output, func(writer io.Writer) error {
+		if options.format == "json" {
+			encoder := json.NewEncoder(writer)
+			encoder.SetIndent("", "  ")
+			return encoder.Encode(report)
+		}
+		return writeGraphText(writer, report)
+	}); err != nil {
+		fmt.Fprintf(stderr, "crap: write report: %v\n", err)
+		return 1
+	}
+	return 0
+}
+
+func parseGraphOptions(args []string, help, stderr io.Writer) (graphCLIOptions, bool) {
+	flags := flag.NewFlagSet("crap graph", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	options := graphCLIOptions{}
+	flags.StringVar(&options.format, "format", "text", "output format: text or json")
+	flags.StringVar(&options.output, "output", "", "write report with safe same-directory replacement")
+	flags.StringVar(&options.coverage, "coverage", "", "optional Cobertura XML or Go coverprofile")
+	flags.Float64Var(&options.threshold, "threshold", 30, "CRAP score threshold for callable decoration")
+	flags.BoolVar(&options.includeTests, "include-tests", false, "include Go and TypeScript test files")
+	flags.BoolVar(&options.includeGenerated, "include-generated", false, "include generated source files")
+	flags.Var(&options.excludes, "exclude", "exclude a root-relative path pattern (repeatable)")
+	flags.BoolVar(&options.strictCoverage, "strict-coverage", false, "fail when coverage paths are unmatched or ambiguous")
+	flags.BoolVar(&options.showHelp, "h", false, "print help")
+	flags.BoolVar(&options.showHelp, "help", false, "print help")
+	writeGraphUsage := func(writer io.Writer) {
+		flags.SetOutput(writer)
+		fmt.Fprintln(writer, "Usage: crap graph [options] [path ...]")
+		fmt.Fprintln(writer, "Build a deterministic file, type, and callable containment graph.")
+		flags.PrintDefaults()
+		flags.SetOutput(stderr)
+	}
+	flags.Usage = func() { writeGraphUsage(stderr) }
+	if err := flags.Parse(args); err != nil {
+		return graphCLIOptions{}, false
+	}
+	options.paths = flags.Args()
+	if options.showHelp {
+		writeGraphUsage(help)
+		return options, true
+	}
+	if options.format != "text" && options.format != "json" {
+		fmt.Fprintf(stderr, "crap: graph does not support format %q\n", options.format)
+		return graphCLIOptions{}, false
+	}
+	if math.IsNaN(options.threshold) || math.IsInf(options.threshold, 0) || options.threshold < 0 {
+		fmt.Fprintln(stderr, "crap: threshold must be a finite non-negative number")
+		return graphCLIOptions{}, false
+	}
+	return options, true
+}
+
+func writeGraphText(writer io.Writer, report analysis.CodeGraphReport) error {
+	if _, err := fmt.Fprintf(writer, "%d nodes and %d edges: %d modules, %d files, %d types, %d callables; %d references (%d resolved)\n", report.Summary.Nodes, report.Summary.Edges, report.Summary.Modules, report.Summary.Files, report.Summary.Types, report.Summary.Callables, report.Summary.References, report.Summary.ResolvedReferences); err != nil {
+		return err
+	}
+	filePaths, moduleNames := graphTextIndexes(report.Nodes)
+	if err := writeGraphTextNodes(writer, report.Nodes); err != nil {
+		return err
+	}
+	if err := writeGraphTextReferences(writer, report.References, filePaths, moduleNames); err != nil {
+		return err
+	}
+	for _, limitation := range report.Limitations {
+		if _, err := fmt.Fprintf(writer, "limitation: %s\n", limitation); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func graphTextIndexes(nodes []analysis.CodeGraphNode) (map[string]string, map[string]string) {
+	filePaths := make(map[string]string, len(nodes))
+	moduleNames := make(map[string]string, len(nodes))
+	for _, node := range nodes {
+		if node.Kind == "file" {
+			filePaths[node.ID] = node.Path
+		} else if node.Kind == "module" && node.Module != nil {
+			moduleNames[node.ID] = node.Module.Name
+		}
+	}
+	return filePaths, moduleNames
+}
+
+func writeGraphTextNodes(writer io.Writer, nodes []analysis.CodeGraphNode) error {
+	for _, node := range nodes {
+		if node.Kind == "module" {
+			if _, err := fmt.Fprintf(writer, "MODULE %s %s\n", node.Module.System, node.Module.Name); err != nil {
+				return err
+			}
+			continue
+		}
+		if node.Kind == "file" {
+			if _, err := fmt.Fprintf(writer, "FILE %s\n", filepath.ToSlash(node.Path)); err != nil {
+				return err
+			}
+			continue
+		}
+		location := fmt.Sprintf("%s:%d", filepath.ToSlash(node.Path), node.Location.StartLine)
+		if node.Metrics == nil {
+			if _, err := fmt.Fprintf(writer, "TYPE %s %s (%s)\n", node.DeclarationKind, node.Name, location); err != nil {
+				return err
+			}
+			continue
+		}
+		if _, err := fmt.Fprintf(writer, "CALLABLE %s %s (%s) CRAP %.2f\n", node.DeclarationKind, node.Name, location, node.Metrics.CRAP); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func writeGraphTextReferences(writer io.Writer, references []analysis.CodeGraphReference, filePaths, moduleNames map[string]string) error {
+	for _, reference := range references {
+		target := reference.Resolution
+		if reference.Target != "" {
+			target = moduleNames[reference.Target]
+			if target == "" {
+				target = reference.Target
+			}
+		} else if reference.Reason != "" {
+			target += " (" + reference.Reason + ")"
+		}
+		if _, err := fmt.Fprintf(writer, "REFERENCE %s %s:%d %s -> %s\n", reference.Kind, filepath.ToSlash(filePaths[reference.SourceFile]), reference.Location.StartLine, reference.Specifier, target); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func runScope(args []string, stdout, stderr io.Writer) int {
@@ -367,6 +549,7 @@ func writeUsage(writer io.Writer, flags *flag.FlagSet) {
 	fmt.Fprintln(writer, "Usage: crap [options] [path ...]")
 	fmt.Fprintln(writer, "       crap scope actual --diff-base REVISION [options] [path ...]")
 	fmt.Fprintln(writer, "       crap compare --base REVISION [options] [path ...]")
+	fmt.Fprintln(writer, "       crap graph [options] [path ...]")
 	fmt.Fprintln(writer, "       crap mcp")
 	fmt.Fprintln(writer, "Deterministically calculate cyclomatic complexity and CRAP scores for C#, Go, and TypeScript callables.")
 	flags.PrintDefaults()

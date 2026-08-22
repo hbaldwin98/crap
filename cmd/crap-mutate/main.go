@@ -26,6 +26,7 @@ type cliOptions struct {
 	paths                        []string
 	minimumScore                 float64
 	timeout                      time.Duration
+	workers, testCPU             int
 	incremental, fail, version   bool
 	dryRun, doctor               bool
 	showHelp                     bool
@@ -142,6 +143,7 @@ func runMutation(options cliOptions, stdout, stderr io.Writer) int {
 	mutationOptions := mutation.Options{
 		Root: root, Language: options.language, Paths: options.paths,
 		MinimumScore: options.minimumScore, TimeoutSeconds: int(options.timeout.Seconds()),
+		Workers: options.workers, TestCPU: options.testCPU,
 		Incremental: options.incremental, ReportPath: options.reportPath,
 	}
 	service := mutation.NewService()
@@ -222,6 +224,8 @@ func parseOptionsWithHelp(args []string, help, stderr io.Writer) (cliOptions, bo
 	flags.StringVar(&options.output, "output", "", "write report with safe same-directory replacement")
 	flags.Float64Var(&options.minimumScore, "minimum-score", 80, "minimum accepted mutation score")
 	flags.DurationVar(&options.timeout, "timeout", 30*time.Minute, "maximum mutation engine runtime")
+	flags.IntVar(&options.workers, "workers", 0, "parallel Gremlins workers; Go only (default 1)")
+	flags.IntVar(&options.testCPU, "test-cpu", 0, "CPUs per Gremlins test process; Go only (default 1)")
 	flags.BoolVar(&options.incremental, "incremental", false, "enable StrykerJS incremental mode")
 	flags.BoolVar(&options.dryRun, "dry-run", false, "print the mutation command plan without running it")
 	flags.StringVar(&options.reportPath, "report-path", "", "custom StrykerJS JSON report path")

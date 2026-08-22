@@ -34,16 +34,23 @@ func (service *Service) Run(ctx context.Context, options Options, output io.Writ
 	}
 	ctx, cancel := context.WithTimeout(ctx, time.Duration(options.TimeoutSeconds)*time.Second)
 	defer cancel()
+	var report Report
+	var err error
 	switch options.Language {
 	case "csharp":
-		return service.runStrykerNet(ctx, options, output)
+		report, err = service.runStrykerNet(ctx, options, output)
 	case "go":
-		return service.runGremlins(ctx, options, output)
+		report, err = service.runGremlins(ctx, options, output)
 	case "typescript":
-		return service.runStrykerJS(ctx, options, output)
+		report, err = service.runStrykerJS(ctx, options, output)
 	default:
 		return Report{}, fmt.Errorf("unsupported language %q", options.Language)
 	}
+	if err != nil {
+		return Report{}, err
+	}
+	report.Fingerprints.ConfigSHA256 = mutationConfigFingerprint(options)
+	return report, nil
 }
 
 func validate(options *Options) error {
@@ -63,11 +70,39 @@ func validate(options *Options) error {
 	if options.TimeoutSeconds < 1 {
 		return fmt.Errorf("timeout must be positive")
 	}
+	if err := validateResourceLimits(options); err != nil {
+		return err
+	}
 	if err := validateMutationPaths(options); err != nil {
 		return err
 	}
 	if options.Incremental && options.Language != "typescript" {
 		return fmt.Errorf("incremental mode is only supported for TypeScript")
+	}
+	return nil
+}
+
+func validateResourceLimits(options *Options) error {
+	if options.Language != "go" {
+		if options.Workers != 0 || options.TestCPU != 0 {
+			return fmt.Errorf("workers and test CPU limits are only supported for Go")
+		}
+		return nil
+	}
+	if options.Workers == 0 {
+		options.Workers = DefaultGoMutationWorkers
+	}
+	if options.TestCPU == 0 {
+		options.TestCPU = DefaultGoMutationTestCPU
+	}
+	if options.Workers < 1 || options.Workers > MaximumGoMutationParallelism {
+		return fmt.Errorf("workers must be between 1 and %d", MaximumGoMutationParallelism)
+	}
+	if options.TestCPU < 1 || options.TestCPU > MaximumGoMutationParallelism {
+		return fmt.Errorf("test CPU must be between 1 and %d", MaximumGoMutationParallelism)
+	}
+	if options.Workers*options.TestCPU > MaximumGoMutationParallelism {
+		return fmt.Errorf("workers multiplied by test CPU must not exceed %d", MaximumGoMutationParallelism)
 	}
 	return nil
 }

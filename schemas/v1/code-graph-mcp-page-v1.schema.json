@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema", "$id": "code-graph-mcp-page-v1.schema.json", "type": "object",
+  "required": ["pageSchemaVersion", "reportType", "reportId", "expiresAt", "schemaVersion", "tool", "fingerprints", "coordinates", "grammars", "coverage", "discovery", "threshold", "policy", "summary", "page", "nodes", "edges", "references", "resolutionInputs", "limitations", "diagnostics"],
+  "properties": {
+    "pageSchemaVersion": {"const": "1"}, "reportType": {"const": "code-graph-page"}, "reportId": {"type": "string", "pattern": "^[0-9a-f]{32}$"}, "expiresAt": {"type": "string", "format": "date-time"}, "schemaVersion": {"const": "1"},
+    "tool": {"$ref": "common.schema.json#/$defs/tool"}, "fingerprints": {"$ref": "common.schema.json#/$defs/fingerprints"}, "coordinates": {"$ref": "common.schema.json#/$defs/coordinates"},
+    "grammars": {"type": "array", "items": {"$ref": "code-graph-v1.schema.json#/$defs/grammar"}}, "coverage": {"$ref": "code-graph-v1.schema.json#/$defs/coverage"}, "discovery": {"$ref": "code-graph-v1.schema.json#/$defs/discovery"},
+    "threshold": {"type": "number", "minimum": 0}, "policy": {"$ref": "code-graph-v1.schema.json#/$defs/policy"}, "summary": {"$ref": "code-graph-v1.schema.json#/$defs/summary"},
+    "page": {"type": "object", "required": ["resultMode", "totalMatched", "offset", "limit", "returned", "hasMore"], "properties": {"resultMode": {"enum": ["summary", "nodes", "edges", "references"]}, "totalMatched": {"type": "integer", "minimum": 0}, "offset": {"type": "integer", "minimum": 0}, "limit": {"type": "integer", "minimum": 1, "maximum": 100}, "returned": {"type": "integer", "minimum": 0, "maximum": 100}, "hasMore": {"type": "boolean"}, "nextCursor": {"type": "string", "minLength": 1}}, "additionalProperties": false},
+    "nodes": {"type": "array", "maxItems": 100, "items": {"$ref": "code-graph-v1.schema.json#/$defs/node"}}, "edges": {"type": "array", "maxItems": 100, "items": {"$ref": "code-graph-v1.schema.json#/$defs/edge"}}, "references": {"type": "array", "maxItems": 100, "items": {"$ref": "code-graph-v1.schema.json#/$defs/reference"}}, "resolutionInputs": {"type": "array", "items": {"$ref": "common.schema.json#/$defs/fileFingerprint"}},
+    "limitations": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}}, "diagnostics": {"type": "array", "items": {"$ref": "common.schema.json#/$defs/diagnostic"}}
+  }, "additionalProperties": false
+}

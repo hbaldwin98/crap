@@ -18,6 +18,7 @@ func newGoLanguage() (languageDefinition, error) {
 			"method_declaration":   "method",
 			"func_literal":         "function_literal",
 		},
+		typeKinds: map[string]string{"type_spec": "type"},
 		branchKinds: map[string]bool{
 			"if_statement":  true,
 			"for_statement": true,
@@ -25,8 +26,25 @@ func newGoLanguage() (languageDefinition, error) {
 		logicalOps:    map[string]bool{"&&": true, "||": true},
 		extraBranch:   goCaseBranch,
 		qualifiedName: goQualifiedName,
+		qualifiedType: goQualifiedTypeName,
 		ownerName:     goOwnerName,
+		moduleSyntax:  goModuleSyntax,
 	}, nil
+}
+
+func goQualifiedTypeName(node *treesitter.Node, source []byte) string {
+	name := nodeSource(node.ChildByFieldName("name"), source)
+	root := node
+	for root.Parent() != nil {
+		root = root.Parent()
+	}
+	for index := uint(0); index < root.NamedChildCount(); index++ {
+		child := root.NamedChild(index)
+		if child.Kind() == "package_clause" && child.NamedChildCount() > 0 {
+			return child.NamedChild(0).Utf8Text(source) + "." + name
+		}
+	}
+	return name
 }
 
 func goCaseBranch(node *treesitter.Node, source []byte) bool {
@@ -101,7 +119,7 @@ func goOwnerName(node *treesitter.Node, source []byte) string {
 		return nodeSource(node.ChildByFieldName("name"), source)
 	case "short_var_declaration", "assignment_statement":
 		return nodeSource(node.ChildByFieldName("left"), source)
-	case "function_declaration", "method_declaration":
+	case "function_declaration", "method_declaration", "type_spec":
 		return nodeSource(node.ChildByFieldName("name"), source)
 	}
 	return ""

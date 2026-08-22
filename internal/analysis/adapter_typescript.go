@@ -28,6 +28,10 @@ func newTypeScriptLanguage(tsx bool) (languageDefinition, error) {
 			"arrow_function":                 "arrow_function",
 			"method_definition":              "method",
 		},
+		typeKinds: map[string]string{
+			"class_declaration": "class", "abstract_class_declaration": "class", "interface_declaration": "interface",
+			"type_alias_declaration": "type_alias", "enum_declaration": "enum",
+		},
 		branchKinds: map[string]bool{
 			"if_statement":       true,
 			"for_statement":      true,
@@ -40,8 +44,25 @@ func newTypeScriptLanguage(tsx bool) (languageDefinition, error) {
 		},
 		logicalOps:    map[string]bool{"&&": true, "||": true, "??": true},
 		qualifiedName: typescriptQualifiedName,
+		qualifiedType: typescriptQualifiedTypeName,
 		ownerName:     typescriptOwnerName,
+		moduleSyntax:  typescriptModuleSyntax,
 	}, nil
+}
+
+func typescriptQualifiedTypeName(node *treesitter.Node, source []byte) string {
+	parts := make([]string, 0)
+	for parent := node.Parent(); parent != nil; parent = parent.Parent() {
+		switch parent.Kind() {
+		case "class_declaration", "abstract_class_declaration", "internal_module", "module":
+			if name := parent.ChildByFieldName("name"); name != nil {
+				parts = append(parts, name.Utf8Text(source))
+			}
+		}
+	}
+	reverseStrings(parts)
+	parts = append(parts, nodeSource(node.ChildByFieldName("name"), source))
+	return strings.Join(parts, ".")
 }
 
 func typescriptQualifiedName(node *treesitter.Node, source []byte) string {
@@ -94,7 +115,7 @@ func typescriptOwnerName(node *treesitter.Node, source []byte) string {
 		return nodeSource(node.ChildByFieldName("key"), source)
 	case "assignment_expression":
 		return nodeSource(node.ChildByFieldName("left"), source)
-	case "class_declaration", "interface_declaration", "namespace_declaration", "module", "function_declaration", "method_definition":
+	case "class_declaration", "abstract_class_declaration", "interface_declaration", "type_alias_declaration", "enum_declaration", "namespace_declaration", "module", "function_declaration", "method_definition":
 		return nodeSource(node.ChildByFieldName("name"), source)
 	}
 	return ""

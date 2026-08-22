@@ -56,8 +56,8 @@ func TestAnalyzeCodeToolReturnsStructuredReport(t *testing.T) {
 	for _, tool := range tools.Tools {
 		toolNames[tool.Name] = true
 	}
-	if len(tools.Tools) != 6 || !toolNames["analyze_code"] || !toolNames["get_analysis_results"] || !toolNames["analyze_change_scope"] || !toolNames["get_change_scope"] || !toolNames["compare_change_scope"] || !toolNames["get_change_scope_comparison"] {
-		t.Fatalf("tools = %#v, want analysis, scope, and comparison tool pairs", toolNames)
+	if len(tools.Tools) != 9 || !toolNames["analyze_code"] || !toolNames["get_analysis_results"] || !toolNames["analyze_change_scope"] || !toolNames["get_change_scope"] || !toolNames["compare_change_scope"] || !toolNames["get_change_scope_comparison"] || !toolNames["analyze_code_graph"] || !toolNames["get_code_graph"] || !toolNames["get_code_graph_neighborhood"] {
+		t.Fatalf("tools = %#v, want analysis, scope, comparison, and graph tools", toolNames)
 	}
 	result, err := clientSession.CallTool(ctx, &mcp.CallToolParams{
 		Name: "analyze_code",
@@ -123,6 +123,7 @@ type fakeAnalyzer struct {
 	report           analysis.Report
 	scopeReport      analysis.ChangeScopeReport
 	comparisonReport analysis.ChangeScopeComparisonReport
+	graphReport      analysis.CodeGraphReport
 }
 
 func (analyzer *fakeAnalyzer) AnalyzeContext(ctx context.Context, _ analysis.Options) (analysis.Report, error) {
@@ -147,6 +148,14 @@ func (analyzer *fakeAnalyzer) CompareChangeScopeContext(ctx context.Context, _ a
 		return analysis.ChangeScopeComparisonReport{}, err
 	}
 	return analyzer.comparisonReport, nil
+}
+
+func (analyzer *fakeAnalyzer) AnalyzeCodeGraphContext(ctx context.Context, _ analysis.CodeGraphOptions) (analysis.CodeGraphReport, error) {
+	analyzer.calls.Add(1)
+	if err := ctx.Err(); err != nil {
+		return analysis.CodeGraphReport{}, err
+	}
+	return analyzer.graphReport, nil
 }
 
 func (*fakeAnalyzer) Close() {}

@@ -123,6 +123,14 @@ func TestParseOptionsRejectsInvalidValues(t *testing.T) {
 	}
 }
 
+func TestParseOptionsAcceptsGoResourceLimits(t *testing.T) {
+	var stderr bytes.Buffer
+	options, ok := parseOptions([]string{"--language", "go", "--workers", "2", "--test-cpu", "4", "internal/analysis"}, &stderr)
+	if !ok || options.workers != 2 || options.testCPU != 4 || len(options.paths) != 1 {
+		t.Fatalf("options = %#v, stderr = %s", options, stderr.String())
+	}
+}
+
 func TestWriteTextShowsActionableMutants(t *testing.T) {
 	score := 50.0
 	report := mutation.Report{Engine: "stryker-js", Score: &score, MinimumScore: 80, Summary: mutation.Summary{Total: 2, Survived: 1}, Mutants: []mutation.MutantResult{

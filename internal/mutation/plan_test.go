@@ -23,7 +23,7 @@ func TestPlanBuildsExactEngineCommands(t *testing.T) {
 		command string
 		args    []string
 	}{
-		{name: "go", options: Options{Root: root, Language: "go", Paths: []string{"internal"}}, command: "gremlins", args: []string{"unleash", "internal", "--output", "$REPORT_PATH", "--threshold-efficacy", "0", "--threshold-mcover", "0"}},
+		{name: "go", options: Options{Root: root, Language: "go", Paths: []string{"internal"}}, command: "gremlins", args: []string{"unleash", "internal", "--output", "$REPORT_PATH", "--workers", "1", "--test-cpu", "1", "--threshold-efficacy", "0", "--threshold-mcover", "0"}},
 		{name: "csharp", options: Options{Root: root, Language: "csharp", Paths: []string{"src/Work.cs"}}, command: "dotnet", args: []string{"stryker", "--reporter", "json", "--output", "$REPORT_PATH", "--break-at", "0", "--mutate", "src/Work.cs"}},
 		{name: "typescript", options: Options{Root: root, Language: "typescript", Paths: []string{"src/**/*.ts", "!src/**/*.spec.ts"}, Incremental: true}, command: npxCommand(), args: []string{"--no-install", "stryker", "run", "--reporters", "json", "--incremental", "--mutate", "src/**/*.ts,!src/**/*.spec.ts"}},
 	}
@@ -40,6 +40,24 @@ func TestPlanBuildsExactEngineCommands(t *testing.T) {
 				t.Fatalf("report path = %q", plan.ReportPath)
 			}
 		})
+	}
+}
+
+func TestPlanIncludesExplicitGoResourceLimitsInCommandAndFingerprint(t *testing.T) {
+	root := t.TempDir()
+	defaultPlan, err := NewService().Plan(Options{Root: root, Language: "go"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	customPlan, err := NewService().Plan(Options{Root: root, Language: "go", Workers: 2, TestCPU: 4})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if argumentAfter(t, customPlan.Arguments, "--workers") != "2" || argumentAfter(t, customPlan.Arguments, "--test-cpu") != "4" {
+		t.Fatalf("arguments = %#v", customPlan.Arguments)
+	}
+	if defaultPlan.Fingerprints.ConfigSHA256 == customPlan.Fingerprints.ConfigSHA256 {
+		t.Fatal("resource limits did not affect the plan fingerprint")
 	}
 }
 

@@ -161,6 +161,19 @@ func TestRunMutationDefaultsRootAndAcceptsScoreBoundaries(t *testing.T) {
 	}
 }
 
+func TestRunMutationPassesGoResourceLimits(t *testing.T) {
+	root := t.TempDir()
+	policy := policyFor(t, root)
+	executor := &fakeExecutor{}
+	_, _, err := runMutation(context.Background(), executor, policy, newSnapshotStore(), RunInput{Language: "go", Workers: 2, TestCPU: 4})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if executor.received.Workers != 2 || executor.received.TestCPU != 4 {
+		t.Fatalf("options = %#v", executor.received)
+	}
+}
+
 func TestRunMutationRejectsInvalidScoresAndOutsideRoots(t *testing.T) {
 	root := t.TempDir()
 	policy := policyFor(t, root)

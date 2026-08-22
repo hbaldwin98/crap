@@ -98,6 +98,7 @@ If no path is supplied, `crap` analyzes the current directory. Go `_test.go` and
 crap [options] [path ...]
 crap scope actual --diff-base REVISION [options] [path ...]
 crap compare --base REVISION [options] [path ...]
+crap graph [options] [path ...]
 crap mcp
 ```
 
@@ -252,6 +253,20 @@ Matching first uses the stable callable ID. Remaining callables match only when 
 
 `--fail-on-regression` exits `2` only when a current callable is newly above threshold: either it was added above threshold or a matched callable crossed from passing to failing with comparable coverage evidence. Existing above-threshold debt and removed callables do not fail the gate. Ambiguous groups make `summary.complete` false but are not silently classified as regressions. The complete report is written before exit `2`. Comparison supports `text` and `json`; text omits unchanged rows while JSON retains all evidence.
 
+### Code Graph
+
+Build a deterministic module dependency graph and language-neutral declaration inventory:
+
+```sh
+crap graph --format json .
+```
+
+The `code-graph` v1 report contains logical module, file, type-declaration occurrence, and callable nodes. Exact Tree-sitter lexical relationships use `contains` and `declares`; files connect to modules through `member-of`; resolved internal static imports aggregate into module-to-module `imports` edges. Every recognized import or using occurrence remains available as a resolved, unresolved, or ambiguous reference. Callable and module nodes expose complexity, optional coverage, CRAP, and threshold status. Nodes, edges, references, and candidates are canonically sorted. Full graph construction fails instead of silently truncating above 100,000 nodes, 250,000 edges, 250,000 references, or 64 containment levels. A file root is level 1; the depth limit applies to text, JSON, and MCP output.
+
+Module identity is language-specific: Go packages use the root `go.mod` module directive plus source directory and package clause; TypeScript and TSX use source-file modules; C# uses declared namespaces. Resolution is deliberately bounded to selected repository source. Go workspaces, replacements, build tags, and vendor rules; TypeScript `tsconfig`, package exports, and path aliases; and C# assembly/project binding remain unresolved. Type nodes are source declaration occurrences, not compiler-resolved semantic types. Calls, runtime dispatch, and behavioral impact remain unmodeled. These limits are included in every report.
+
+Graph output supports `text` and `json`. The JSON report is the AI-consumable contract for understanding application structure: nodes with module/type/callable identity and metrics, exact lexical `contains`/`declares` edges, module `member-of` and resolved `imports` edges, and every recognized import or using reference with resolution status, targets, candidates, and reasons. Text summarizes modules, references, and limitations.
+
 ## MCP Server
 
 Start the stdio server with:
@@ -275,7 +290,7 @@ Example MCP client configuration:
 
 Use an absolute executable path and an explicit `--root` because an MCP client may start the server from a different working directory. On Windows, use paths such as `C:\\tools\\crap.exe` and `C:\\source\\my-project` in JSON. Repeat `--allow-root PATH` to let callers select projects under additional roots. MCP requests cannot read source or coverage files outside the selected authorized root, including through existing symlinks.
 
-The server exposes analysis, change-scope, and comparison tool pairs. `analyze_code` runs one analysis, stores an immutable serialized snapshot, and returns its first page. Its inputs are:
+The server exposes analysis, change-scope, comparison, and code-graph tools. `analyze_code` runs one analysis, stores an immutable serialized snapshot, and returns its first page. Its inputs are:
 
 | Input | Type | Default | Purpose |
 | --- | --- | --- | --- |
@@ -315,6 +330,10 @@ The analysis CLI emits analysis report schema v6. The current MCP envelope uses 
 `analyze_change_scope` accepts the same root, path, coverage, threshold, and discovery inputs, but requires `diffBase`. It returns the complete `change-scope` v1 report inside a `pageSchemaVersion: "1"` envelope with `reportId` and `expiresAt`. Pass that ID to `get_change_scope` to retrieve the immutable report without rerunning Git or rereading source. Scope snapshots share the analysis server's bounded storage and expiration policy. These tools report structural change evidence only; callers must not present containment as semantic impact.
 
 `compare_change_scope` accepts the same source-selection inputs, requires `baseRevision`, and accepts independent `coveragePath` and `baseCoveragePath` artifacts. It reads merge-base source directly from Git, returns the complete comparison v1 report, and stores an immutable typed snapshot. Pass its ID to `get_change_scope_comparison`; retrieval does not reread Git, source, or coverage. Comparison snapshot IDs cannot be used with analysis or scope retrieval tools.
+
+`analyze_code_graph` accepts source-selection, coverage, and threshold inputs, builds one complete structural and module-dependency graph, stores it as an immutable typed snapshot, and returns `summary`, `nodes`, `edges`, or `references` detail. `get_code_graph` pages the same snapshot with a signed cursor; it never rereads source. References preserve unresolved and ambiguous import evidence instead of guessing. Pages contain at most 100 records. MCP retention still has a separate 16 MiB serialized-report limit, 30-minute default expiry, eight-entry limit, and 64 MiB total bound.
+
+`get_code_graph_neighborhood` accepts one through 20 retained node IDs, direction `incoming`, `outgoing`, or `both`, depth zero through five, optional `contains`/`declares`/`member-of`/`imports` edge filters, and bounded node/edge limits. It returns a coherent subgraph with each node's minimum seed distance and the exact import references supporting retained dependency edges. It never emits dangling edges and reports exact omitted node and edge counts when truncated. Neighborhoods are static structural/dependency evidence, not semantic impact.
 
 ## Mutation Testing
 
@@ -362,6 +381,8 @@ Options:
 | `--minimum-score SCORE` | `80` | Set the accepted score from 0 through 100. |
 | `--fail-on-threshold` | `false` | Exit with code `2` when the score is unavailable or below the minimum. |
 | `--timeout DURATION` | `30m` | Stop the engine after a Go duration such as `10m` or `1h`. |
+| `--workers COUNT` | `1` | Limit parallel Gremlins mutants for Go. |
+| `--test-cpu COUNT` | `1` | Limit CPUs used by each Gremlins Go test process. |
 | `--incremental` | `false` | Enable StrykerJS incremental mode. |
 | `--report-path PATH` | StrykerJS default | Read a custom StrykerJS JSON reporter path. |
 | `--dry-run` | `false` | Validate inputs and print the exact native command plan without executing it. |
@@ -387,7 +408,7 @@ crap-mutate --language go --minimum-score 80 --fail-on-threshold ./internal/anal
 crap-mutate --language typescript --minimum-score 80 --fail-on-threshold "src/**/*.ts" "!src/**/*.spec.ts"
 ```
 
-For Go, pass at most one package directory per run. The path must stay within the project root. Run the command once per package when a module has no Go package at its root; Gremlins otherwise scans recursively without collecting useful package coverage. Configure file exclusions in Gremlins itself. C# and TypeScript paths use each Stryker engine's glob syntax.
+For Go, pass at most one package directory per run. The path must stay within the project root. Run the command once per package when a module has no Go package at its root; Gremlins otherwise scans recursively without collecting useful package coverage. `crap-mutate` explicitly passes `--workers 1 --test-cpu 1` by default so mutation cannot multiply unconstrained Go test workloads. Higher values are opt-in; each value and their product are capped at 16. Configure file exclusions in Gremlins itself. C# and TypeScript paths use each Stryker engine's glob syntax.
 
 The text report prints survived and uncovered mutants. JSON includes every mutant and these fields:
 
@@ -432,6 +453,8 @@ Start the separate mutation server with `crap-mutate mcp --root /absolute/path/t
 | `paths` | string array | Go root package | C# or TypeScript source paths/globs; required for authorized MCP runs. |
 | `minimumScore` | number | `80` | Accepted score from 0 through 100. |
 | `timeoutSeconds` | integer | `1800` | Maximum native engine runtime. |
+| `workers` | integer | `1` | Parallel Gremlins workers for Go; combined resource product is capped at 16. |
+| `testCpu` | integer | `1` | CPUs per Gremlins test process for Go; combined resource product is capped at 16. |
 | `incremental` | boolean | `false` | Enable StrykerJS incremental mode. |
 | `reportPath` | string | StrykerJS default | Custom StrykerJS JSON report path inside `root`. |
 | `resultMode` | string | `actionable` | Return `summary`, `actionable`, or `all` mutants. |
@@ -474,7 +497,7 @@ Both MCP servers publish initialization instructions that tell capable clients w
 
 ## Report Contracts
 
-JSON outputs carry `reportType`, `schemaVersion`, one shared tool version, coordinate semantics, and deterministic fingerprints. Analysis is v6, actual change scope is v1, change-scope comparison is v1, mutation is v3, mutation plans are v2, and mutation doctor output has its independent v1 contract. Incompatible changes increment the contract that changed; MCP envelope versions are independent from their underlying report versions. Analysis v5 added Go function literals and C# lambdas, anonymous methods, and expression-bodied properties/indexers. Analysis v6 adds deterministic source-discovery policy and metadata.
+JSON outputs carry `reportType`, `schemaVersion`, one shared tool version, coordinate semantics, and deterministic fingerprints. Analysis is v6, actual change scope is v1, change-scope comparison is v1, code graph and code-graph neighborhoods are v1, mutation is v3, mutation plans are v2, and mutation doctor output has its independent v1 contract. Incompatible changes increment the contract that changed; MCP envelope versions are independent from their underlying report versions. Analysis v5 added Go function literals and C# lambdas, anonymous methods, and expression-bodied properties/indexers. Analysis v6 adds deterministic source-discovery policy and metadata.
 
 Normalized analysis coordinates are 1-based UTF-8 byte columns with exclusive ends. Normalized mutation coordinates remain engine-native. SARIF is a separate presentation contract and converts or validates both forms as 1-based UTF-16 code units for GitHub. Analysis callable names, signatures, and ranges come from the language AST. Callable IDs hash language, normalized file path, kind, lexical signature, and same-signature occurrence, so inserting blank lines above a callable does not change its ID. Mutation wrapper IDs hash normalized file, range, mutator, and replacement; Stryker's `nativeId` and status do not affect them.
 
@@ -486,12 +509,12 @@ Published JSON Schema 2020-12 files are under [`schemas/v1`](schemas/v1), with m
 
 Change intelligence will grow from deterministic evidence rather than inferred impact claims:
 
-1. Baseline comparison and new-regression gates.
-2. Language-neutral symbol inventory.
-3. File and module dependency graph.
-4. Deterministic self-contained HTML visualization.
-5. Architecture rules and cycle proofs.
-6. Call relationships and affected-test traversal.
+1. Completed: baseline comparison and new-regression gates.
+2. Completed: lexical language-neutral file, type-declaration, and callable inventory.
+3. Completed: bounded selected-source module dependency graph with explicit unresolved references.
+4. Completed: AI-consumable `crap graph` JSON and text structural contract.
+5. Next: architecture rules and cycle proofs.
+6. Compiler-backed call relationships and affected-test traversal.
 7. Unified change oracle joining scope, quality, tests, and architecture evidence.
 
 Each phase must keep engine facts, unresolved edges, and AI or user judgment distinct.

@@ -67,6 +67,10 @@ func (store *snapshotStore) putChangeScopeComparisonContext(ctx context.Context,
 	return store.putValueContext(ctx, "change-scope-comparison", report)
 }
 
+func (store *snapshotStore) putCodeGraphContext(ctx context.Context, report analysis.CodeGraphReport) (*snapshot, error) {
+	return store.putValueContext(ctx, "code-graph", report)
+}
+
 func (store *snapshotStore) putValueContext(ctx context.Context, kind string, value any) (*snapshot, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -168,6 +172,17 @@ func (store *snapshotStore) decodeChangeScopeComparison(item *snapshot) (analysi
 	var report analysis.ChangeScopeComparisonReport
 	if err := json.Unmarshal(item.data, &report); err != nil {
 		return analysis.ChangeScopeComparisonReport{}, fmt.Errorf("decode change scope comparison snapshot: %w", err)
+	}
+	return report, nil
+}
+
+func (store *snapshotStore) decodeCodeGraph(item *snapshot) (analysis.CodeGraphReport, error) {
+	if item.kind != "code-graph" {
+		return analysis.CodeGraphReport{}, fmt.Errorf("snapshot is not a code graph report")
+	}
+	var report analysis.CodeGraphReport
+	if err := json.Unmarshal(item.data, &report); err != nil {
+		return analysis.CodeGraphReport{}, fmt.Errorf("decode code graph snapshot: %w", err)
 	}
 	return report, nil
 }

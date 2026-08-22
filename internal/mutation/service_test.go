@@ -53,15 +53,42 @@ func TestServiceRunsGremlinsAndParsesReport(t *testing.T) {
 		if argumentAfter(t, args, "--threshold-efficacy") != "0" || argumentAfter(t, args, "--threshold-mcover") != "0" {
 			t.Fatalf("native thresholds not disabled: %#v", args)
 		}
+		if argumentAfter(t, args, "--workers") != "1" || argumentAfter(t, args, "--test-cpu") != "1" {
+			t.Fatalf("resource limits not applied: %#v", args)
+		}
 		path := argumentAfter(t, args, "--output")
 		writeTestFile(t, path, gremlinsKilledReport)
 	}}}
-	report, err := service.Run(context.Background(), Options{Root: root, Language: "go", Paths: []string{"internal"}, MinimumScore: 80}, io.Discard)
+	options := Options{Root: root, Language: "go", Paths: []string{"internal"}, MinimumScore: 80}
+	plan, err := service.Plan(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	report, err := service.Run(context.Background(), options, io.Discard)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if report.Engine != "gremlins" || report.Score == nil || *report.Score != 100 {
 		t.Fatalf("unexpected report: %#v", report)
+	}
+	if report.Fingerprints.ConfigSHA256 != plan.Fingerprints.ConfigSHA256 {
+		t.Fatalf("report fingerprint %s does not match plan %s", report.Fingerprints.ConfigSHA256, plan.Fingerprints.ConfigSHA256)
+	}
+}
+
+func TestServiceRejectsUnsafeGoResourceLimits(t *testing.T) {
+	root := t.TempDir()
+	cases := []Options{
+		{Root: root, Language: "go", Workers: -1},
+		{Root: root, Language: "go", Workers: MaximumGoMutationParallelism + 1},
+		{Root: root, Language: "go", TestCPU: MaximumGoMutationParallelism + 1},
+		{Root: root, Language: "go", Workers: 4, TestCPU: 8},
+		{Root: root, Language: "typescript", Workers: 1},
+	}
+	for _, options := range cases {
+		if _, err := NewService().Plan(options); err == nil {
+			t.Errorf("accepted options %#v", options)
+		}
 	}
 }
 

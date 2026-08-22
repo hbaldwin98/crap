@@ -26,6 +26,10 @@ func newCSharpLanguage() (languageDefinition, error) {
 			"property_declaration":            "property",
 			"indexer_declaration":             "indexer",
 		},
+		typeKinds: map[string]string{
+			"class_declaration": "class", "struct_declaration": "struct", "record_declaration": "record",
+			"interface_declaration": "interface", "enum_declaration": "enum", "delegate_declaration": "delegate",
+		},
 		branchKinds: map[string]bool{
 			"if_statement":              true,
 			"for_statement":             true,
@@ -44,8 +48,36 @@ func newCSharpLanguage() (languageDefinition, error) {
 		callable:      csharpCallable,
 		body:          csharpCallableBody,
 		qualifiedName: csharpQualifiedName,
+		qualifiedType: csharpQualifiedTypeName,
 		ownerName:     csharpOwnerName,
+		moduleSyntax:  csharpModuleSyntax,
 	}, nil
+}
+
+func csharpQualifiedTypeName(node *treesitter.Node, source []byte) string {
+	parts := make([]string, 0)
+	root := node
+	for parent := node.Parent(); parent != nil; parent = parent.Parent() {
+		root = parent
+		switch parent.Kind() {
+		case "namespace_declaration", "file_scoped_namespace_declaration", "class_declaration", "struct_declaration", "record_declaration", "interface_declaration":
+			if name := parent.ChildByFieldName("name"); name != nil {
+				parts = append(parts, name.Utf8Text(source))
+			}
+		}
+	}
+	for index := uint(0); index < root.NamedChildCount(); index++ {
+		child := root.NamedChild(index)
+		if child.Kind() == "file_scoped_namespace_declaration" {
+			if name := child.ChildByFieldName("name"); name != nil {
+				parts = append(parts, name.Utf8Text(source))
+			}
+			break
+		}
+	}
+	reverseStrings(parts)
+	parts = append(parts, nodeSource(node.ChildByFieldName("name"), source))
+	return strings.Join(parts, ".")
 }
 
 func csharpCallable(node *treesitter.Node) bool {
@@ -200,7 +232,7 @@ func csharpOwnerName(node *treesitter.Node, source []byte) string {
 		return "this" + strings.Join(strings.Fields(nodeSource(parameters, source)), "")
 	case "property_declaration", "operator_declaration", "conversion_operator_declaration":
 		return csharpMemberName(node, source)
-	case "class_declaration", "interface_declaration", "namespace_declaration", "module", "function_declaration", "method_definition":
+	case "class_declaration", "struct_declaration", "record_declaration", "interface_declaration", "enum_declaration", "delegate_declaration", "namespace_declaration", "module", "function_declaration", "method_definition":
 		return nodeSource(node.ChildByFieldName("name"), source)
 	}
 	return ""

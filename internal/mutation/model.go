@@ -7,12 +7,20 @@ import (
 
 const SchemaVersion = "3"
 
+const (
+	DefaultGoMutationWorkers     = 1
+	DefaultGoMutationTestCPU     = 1
+	MaximumGoMutationParallelism = 16
+)
+
 type Options struct {
 	Root           string
 	Language       string
 	Paths          []string
 	MinimumScore   float64
 	TimeoutSeconds int
+	Workers        int
+	TestCPU        int
 	Incremental    bool
 	ReportPath     string
 	Authorization  *rootauth.Root

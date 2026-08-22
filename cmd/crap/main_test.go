@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,6 +14,14 @@ import (
 	"github.com/hbaldwin98/crap/internal/buildinfo"
 	"github.com/hbaldwin98/crap/internal/sarif"
 )
+
+type errorWriter struct {
+	err error
+}
+
+func (writer errorWriter) Write([]byte) (int, error) {
+	return 0, writer.err
+}
 
 func TestRunVersion(t *testing.T) {
 	var stdout, stderr bytes.Buffer
@@ -25,7 +34,7 @@ func TestRunVersion(t *testing.T) {
 }
 
 func TestRunHelpExitsZero(t *testing.T) {
-	for _, args := range [][]string{{"-h"}, {"--help"}, {"scope", "actual", "--help"}, {"compare", "--help"}, {"mcp", "--help"}} {
+	for _, args := range [][]string{{"-h"}, {"--help"}, {"scope", "actual", "--help"}, {"compare", "--help"}, {"graph", "--help"}, {"mcp", "--help"}} {
 		var stdout, stderr bytes.Buffer
 		if code := run(args, &stdout, &stderr); code != 0 {
 			t.Errorf("run(%v) exit code = %d, stderr = %s", args, code, stderr.String())
@@ -33,6 +42,67 @@ func TestRunHelpExitsZero(t *testing.T) {
 		if !strings.Contains(stdout.String(), "Usage:") || stderr.Len() != 0 {
 			t.Errorf("run(%v) stdout = %q, stderr = %q", args, stdout.String(), stderr.String())
 		}
+	}
+}
+
+func TestRunCodeGraphJSON(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "sample.go"), []byte("package sample\ntype Work struct{}\nfunc Run() {}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	workingDirectory, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(root); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(workingDirectory) })
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"graph", "--format", "json", "."}, &stdout, &stderr); code != 0 {
+		t.Fatalf("exit code = %d, stderr = %s", code, stderr.String())
+	}
+	var report analysis.CodeGraphReport
+	if err := json.Unmarshal(stdout.Bytes(), &report); err != nil {
+		t.Fatal(err)
+	}
+	if report.ReportType != "code-graph" || report.Summary.Files != 1 || report.Summary.Modules != 1 || report.Summary.Types != 1 || report.Summary.Callables != 1 || report.Summary.Edges != 3 {
+		t.Fatalf("report = %#v", report)
+	}
+}
+
+func TestWriteGraphTextRendersEveryNodeKindAndLimitations(t *testing.T) {
+	report := analysis.CodeGraphReport{
+		Summary: analysis.CodeGraphSummary{Nodes: 4, Edges: 3, Modules: 1, Files: 1, Types: 1, Callables: 1, References: 1, ResolvedReferences: 1},
+		Nodes: []analysis.CodeGraphNode{
+			{ID: "module", Kind: "module", Module: &analysis.CodeGraphModuleIdentity{System: "go-package", Name: "example.test/src"}},
+			{ID: "file", Kind: "file", Path: filepath.Join("src", "work.go")},
+			{Kind: "type", DeclarationKind: "struct", Name: "Work", Path: filepath.Join("src", "work.go"), Location: &analysis.CodeGraphLocation{StartLine: 3}},
+			{Kind: "callable", DeclarationKind: "method", Name: "Run", Path: filepath.Join("src", "work.go"), Location: &analysis.CodeGraphLocation{StartLine: 5}, Metrics: &analysis.CodeGraphMetrics{CRAP: 4.25}},
+		},
+		References:  []analysis.CodeGraphReference{{Kind: "go-import", SourceFile: "file", Specifier: "example.test/dep", Location: analysis.CodeGraphLocation{StartLine: 2}, Resolution: "resolved", Target: "dependency"}},
+		Limitations: []string{"lexical relationships only"},
+	}
+	var output bytes.Buffer
+	if err := writeGraphText(&output, report); err != nil {
+		t.Fatal(err)
+	}
+	want := "4 nodes and 3 edges: 1 modules, 1 files, 1 types, 1 callables; 1 references (1 resolved)\n" +
+		"MODULE go-package example.test/src\n" +
+		"FILE src/work.go\n" +
+		"TYPE struct Work (src/work.go:3)\n" +
+		"CALLABLE method Run (src/work.go:5) CRAP 4.25\n" +
+		"REFERENCE go-import src/work.go:2 example.test/dep -> dependency\n" +
+		"limitation: lexical relationships only\n"
+	if output.String() != want {
+		t.Fatalf("output = %q, want %q", output.String(), want)
+	}
+}
+
+func TestWriteGraphTextReturnsWriterErrors(t *testing.T) {
+	want := errors.New("write failed")
+	if err := writeGraphText(errorWriter{err: want}, analysis.CodeGraphReport{}); !errors.Is(err, want) {
+		t.Fatalf("error = %v, want %v", err, want)
 	}
 }
 

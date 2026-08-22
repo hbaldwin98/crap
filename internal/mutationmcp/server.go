@@ -20,6 +20,8 @@ type RunInput struct {
 	Paths          []string `json:"paths,omitempty" jsonschema:"Production source paths or globs to mutate. Go accepts one package directory; C# and TypeScript accept in-root engine globs."`
 	MinimumScore   *float64 `json:"minimumScore,omitempty" jsonschema:"Minimum accepted mutation score from 0 through 100. Defaults to 80."`
 	TimeoutSeconds int      `json:"timeoutSeconds,omitempty" jsonschema:"Maximum engine runtime in seconds. Defaults to 1800."`
+	Workers        int      `json:"workers,omitempty" jsonschema:"Parallel Gremlins workers for Go. Defaults to 1; maximum resource product with testCpu is 16."`
+	TestCPU        int      `json:"testCpu,omitempty" jsonschema:"CPUs per Gremlins test process for Go. Defaults to 1; maximum resource product with workers is 16."`
 	Incremental    bool     `json:"incremental,omitempty" jsonschema:"Enable StrykerJS incremental mode. TypeScript only."`
 	ReportPath     string   `json:"reportPath,omitempty" jsonschema:"In-root StrykerJS JSON report path when project configuration changes its default location."`
 	ResultMode     string   `json:"resultMode,omitempty" jsonschema:"Mutants to return: summary, actionable, or all. Defaults to actionable."`
@@ -41,6 +43,8 @@ type InspectInput struct {
 	Paths          []string `json:"paths,omitempty" jsonschema:"Production source paths or globs. Go accepts one package directory; C# and TypeScript require in-root patterns."`
 	MinimumScore   *float64 `json:"minimumScore,omitempty" jsonschema:"Minimum accepted mutation score from 0 through 100. Defaults to 80."`
 	TimeoutSeconds int      `json:"timeoutSeconds,omitempty" jsonschema:"Maximum diagnostic or engine runtime in seconds. Defaults to 1800."`
+	Workers        int      `json:"workers,omitempty" jsonschema:"Parallel Gremlins workers for Go. Defaults to 1; maximum resource product with testCpu is 16."`
+	TestCPU        int      `json:"testCpu,omitempty" jsonschema:"CPUs per Gremlins test process for Go. Defaults to 1; maximum resource product with workers is 16."`
 	Incremental    bool     `json:"incremental,omitempty" jsonschema:"Enable StrykerJS incremental mode. TypeScript only."`
 	ReportPath     string   `json:"reportPath,omitempty" jsonschema:"In-root StrykerJS JSON report path."`
 }
@@ -159,7 +163,8 @@ func inspectOptions(policy *rootauth.Policy, input InspectInput) (mutation.Optio
 	}
 	return mutation.Options{
 		Root: scope.Path(), Language: input.Language, Paths: input.Paths, MinimumScore: minimum,
-		TimeoutSeconds: input.TimeoutSeconds, Incremental: input.Incremental, ReportPath: input.ReportPath, Authorization: scope,
+		TimeoutSeconds: input.TimeoutSeconds, Workers: input.Workers, TestCPU: input.TestCPU,
+		Incremental: input.Incremental, ReportPath: input.ReportPath, Authorization: scope,
 	}, nil
 }
 
@@ -181,7 +186,8 @@ func runMutation(ctx context.Context, service executor, policy *rootauth.Policy,
 	}
 	report, err := service.Run(ctx, mutation.Options{
 		Root: scope.Path(), Language: input.Language, Paths: input.Paths, MinimumScore: minimum,
-		TimeoutSeconds: input.TimeoutSeconds, Incremental: input.Incremental, ReportPath: input.ReportPath, Authorization: scope,
+		TimeoutSeconds: input.TimeoutSeconds, Workers: input.Workers, TestCPU: input.TestCPU,
+		Incremental: input.Incremental, ReportPath: input.ReportPath, Authorization: scope,
 	}, nil)
 	if err != nil {
 		return nil, MutationOutput{}, err

@@ -1,0 +1,12 @@
+{
+  "pageSchemaVersion": "1", "reportType": "code-graph-page", "reportId": "11111111111111111111111111111111", "expiresAt": "2026-08-21T12:00:00Z", "schemaVersion": "1",
+  "tool": {"name": "crap", "version": "0.2.0", "modified": false},
+  "fingerprints": {"sources": [{"path": "src/work.go", "sha256": "0000000000000000000000000000000000000000000000000000000000000000"}], "coverage": null, "nativeReport": null, "git": null, "configSha256": "1111111111111111111111111111111111111111111111111111111111111111"},
+  "coordinates": {"lineBase": 1, "columnBase": 1, "columnEncoding": "utf-8-bytes", "end": "exclusive"}, "grammars": [{"language": "go", "version": "v0.23.4"}],
+  "coverage": {"format": "none"}, "discovery": {"selected": 1, "exclusions": []}, "threshold": 30,
+  "policy": {"identity": "declaration-occurrence-and-logical-module-v1", "ownership": "nearest-lexical-parent", "resolution": "bounded-selected-source-v1"},
+  "summary": {"files": 1, "modules": 0, "types": 0, "callables": 0, "nodes": 1, "containsEdges": 0, "declaresEdges": 0, "memberOfEdges": 0, "importsEdges": 0, "edges": 0, "references": 0, "resolvedReferences": 0, "unresolvedReferences": 0, "ambiguousReferences": 0, "aboveThreshold": 0},
+  "page": {"resultMode": "nodes", "totalMatched": 1, "offset": 0, "limit": 20, "returned": 1, "hasMore": false},
+  "nodes": [{"id": "2222222222222222222222222222222222222222222222222222222222222222", "kind": "file", "language": "go", "name": "work.go", "path": "src/work.go", "location": null, "metrics": null}], "edges": [], "references": [], "resolutionInputs": [],
+  "limitations": ["relationships are limited to exact lexical containment"], "diagnostics": []
+}

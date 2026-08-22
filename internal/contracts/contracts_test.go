@@ -32,6 +32,9 @@ var contractFixtures = map[string]string{
 	"change-scope-mcp-v1.schema.json":            "change-scope-mcp-v1.json",
 	"change-scope-comparison-v1.schema.json":     "change-scope-comparison-v1.json",
 	"change-scope-comparison-mcp-v1.schema.json": "change-scope-comparison-mcp-v1.json",
+	"code-graph-v1.schema.json":                  "code-graph-v1.json",
+	"code-graph-mcp-page-v1.schema.json":         "code-graph-mcp-page-v1.json",
+	"code-graph-neighborhood-mcp-v1.schema.json": "code-graph-neighborhood-mcp-v1.json",
 }
 
 func TestGoldenContractFixtures(t *testing.T) {
@@ -86,6 +89,27 @@ func TestGeneratedAnalysisAndPlanValidate(t *testing.T) {
 		ReportID:          strings.Repeat("2", 32),
 		ExpiresAt:         time.Date(2026, time.August, 21, 12, 0, 0, 0, time.UTC).Format(time.RFC3339),
 		Report:            comparison,
+	})
+	graph, err := analyzer.AnalyzeCodeGraph(analysis.CodeGraphOptions{Root: project, Paths: []string{"work.go"}, CRAPThreshold: 30})
+	if err != nil {
+		t.Fatal(err)
+	}
+	validateValue(t, filepath.Join(root, "schemas", "v1", "code-graph-v1.schema.json"), graph)
+	expiresAt := time.Date(2026, time.August, 21, 12, 0, 0, 0, time.UTC).Format(time.RFC3339)
+	validateValue(t, filepath.Join(root, "schemas", "v1", "code-graph-mcp-page-v1.schema.json"), mcpserver.CodeGraphOutput{
+		PageSchemaVersion: "1", ReportType: "code-graph-page", ReportID: strings.Repeat("3", 32), ExpiresAt: expiresAt,
+		SchemaVersion: graph.SchemaVersion, Tool: graph.Tool, Fingerprints: graph.Fingerprints, Coordinates: graph.Coordinates,
+		Grammars: graph.Grammars, Coverage: graph.Coverage, Discovery: graph.Discovery, Threshold: graph.Threshold,
+		Policy: graph.Policy, Summary: graph.Summary,
+		Page:  mcpserver.Page{ResultMode: "nodes", TotalMatched: len(graph.Nodes), Limit: 100, Returned: len(graph.Nodes)},
+		Nodes: graph.Nodes, Edges: []analysis.CodeGraphEdge{}, References: []analysis.CodeGraphReference{}, ResolutionInputs: graph.ResolutionInputs, Limitations: graph.Limitations, Diagnostics: graph.Diagnostics,
+	})
+	neighborhood, err := analysis.BuildCodeGraphNeighborhood(graph, analysis.CodeGraphNeighborhoodOptions{SeedNodeIDs: []string{graph.Nodes[0].ID}, Depth: 0, MaximumNodes: 100, MaximumEdges: 200})
+	if err != nil {
+		t.Fatal(err)
+	}
+	validateValue(t, filepath.Join(root, "schemas", "v1", "code-graph-neighborhood-mcp-v1.schema.json"), mcpserver.CodeGraphNeighborhoodOutput{
+		PageSchemaVersion: "1", ReportID: strings.Repeat("3", 32), ExpiresAt: expiresAt, Neighborhood: neighborhood,
 	})
 
 	plan, err := mutation.NewService().Plan(mutation.Options{Root: project, Language: "go", Paths: []string{"."}, MinimumScore: 80, TimeoutSeconds: 60})

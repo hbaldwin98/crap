@@ -6,6 +6,7 @@ import (
 	"io"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -28,24 +29,30 @@ func (service *Service) Plan(options Options) (Plan, error) {
 		}
 	}
 	executable, arguments, reportPath := commandPlan(options, reportPath)
+	return Plan{
+		SchemaVersion: PlanSchemaVersion, ReportType: "mutation-plan", Tool: buildinfo.Tool("crap-mutate"),
+		Coordinates:  reportcontract.DefaultCoordinates(),
+		Fingerprints: reportcontract.Fingerprints{Sources: make([]reportcontract.FileFingerprint, 0), ConfigSHA256: mutationConfigFingerprint(options)},
+		Root:         options.Root, Language: options.Language,
+		Engine: engineName(options.Language), Executable: executable, Arguments: arguments,
+		ReportPath: reportPath, TimeoutSeconds: options.TimeoutSeconds, MinimumScore: options.MinimumScore,
+	}, nil
+}
+
+func mutationConfigFingerprint(options Options) string {
 	paths := append(make([]string, 0, len(options.Paths)), options.Paths...)
 	for index := range paths {
 		paths[index] = semanticPlanPath(options.Root, paths[index])
 	}
-	return Plan{
-		SchemaVersion: PlanSchemaVersion, ReportType: "mutation-plan", Tool: buildinfo.Tool("crap-mutate"),
-		Coordinates: reportcontract.DefaultCoordinates(),
-		Fingerprints: reportcontract.Fingerprints{Sources: make([]reportcontract.FileFingerprint, 0), ConfigSHA256: reportcontract.JSONFingerprint(struct {
-			Language       string   `json:"language"`
-			Paths          []string `json:"paths"`
-			MinimumScore   float64  `json:"minimumScore"`
-			TimeoutSeconds int      `json:"timeoutSeconds"`
-			Incremental    bool     `json:"incremental"`
-		}{options.Language, paths, options.MinimumScore, options.TimeoutSeconds, options.Incremental})},
-		Root: options.Root, Language: options.Language,
-		Engine: engineName(options.Language), Executable: executable, Arguments: arguments,
-		ReportPath: reportPath, TimeoutSeconds: options.TimeoutSeconds, MinimumScore: options.MinimumScore,
-	}, nil
+	return reportcontract.JSONFingerprint(struct {
+		Language       string   `json:"language"`
+		Paths          []string `json:"paths"`
+		MinimumScore   float64  `json:"minimumScore"`
+		TimeoutSeconds int      `json:"timeoutSeconds"`
+		Workers        int      `json:"workers"`
+		TestCPU        int      `json:"testCpu"`
+		Incremental    bool     `json:"incremental"`
+	}{options.Language, paths, options.MinimumScore, options.TimeoutSeconds, options.Workers, options.TestCPU, options.Incremental})
 }
 
 func semanticPlanPath(root, value string) string {
@@ -122,7 +129,9 @@ func commandPlan(options Options, reportPath string) (string, []string, string) 
 		if len(options.Paths) == 1 {
 			args = append(args, options.Paths[0])
 		}
-		args = append(args, "--output", reportPath, "--threshold-efficacy", "0", "--threshold-mcover", "0")
+		args = append(args, "--output", reportPath,
+			"--workers", strconv.Itoa(options.Workers), "--test-cpu", strconv.Itoa(options.TestCPU),
+			"--threshold-efficacy", "0", "--threshold-mcover", "0")
 		return "gremlins", args, reportPath
 	case "csharp":
 		args := []string{"stryker", "--reporter", "json", "--output", reportPath, "--break-at", "0"}

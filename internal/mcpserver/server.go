@@ -121,6 +121,7 @@ type analyzerExecution interface {
 	AnalyzeContext(context.Context, analysis.Options) (analysis.Report, error)
 	AnalyzeChangeScopeContext(context.Context, analysis.Options) (analysis.ChangeScopeReport, error)
 	CompareChangeScopeContext(context.Context, analysis.ComparisonOptions) (analysis.ChangeScopeComparisonReport, error)
+	AnalyzeCodeGraphContext(context.Context, analysis.CodeGraphOptions) (analysis.CodeGraphReport, error)
 	Close()
 }
 
@@ -136,7 +137,7 @@ func New(version string, policy *rootauth.Policy) *mcp.Server {
 
 func newServer(version string, policy *rootauth.Policy, snapshots *snapshotStore, factory analyzerFactory) *mcp.Server {
 	server := mcp.NewServer(&mcp.Implementation{Name: "crap", Version: version}, &mcp.ServerOptions{
-		Instructions: "Use analyze_code whenever the user asks to run, check, or report CRAP scores or cyclomatic complexity for C#, Go, or TypeScript. Never estimate these scores yourself. Start with the default violations view or resultMode=summary, then use get_analysis_results for later immutable pages. Use analyze_change_scope for Git-reported current-source ranges, intersecting callables, and file containment. Use compare_change_scope to read merge-base source directly from Git and report deterministic quality deltas and new regressions. Do not present scope or comparison as semantic impact or proof that unlisted code is unaffected; use retrieval tools for immutable snapshots.",
+		Instructions: "Use analyze_code whenever the user asks to run, check, or report CRAP scores or cyclomatic complexity for C#, Go, or TypeScript. Never estimate these scores yourself. Start with the default violations view or resultMode=summary, then use get_analysis_results for later immutable pages. Use analyze_change_scope for Git-reported current-source ranges, intersecting callables, and file containment. Use compare_change_scope to read merge-base source directly from Git and report deterministic quality deltas and new regressions. Use analyze_code_graph for exact lexical structure, logical modules, bounded selected-source dependencies, and unresolved import evidence, then query immutable pages or bounded neighborhoods. Do not present scope, comparison, or graph proximity as semantic impact or proof that unlisted code is unaffected.",
 	})
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "analyze_code",
@@ -184,6 +185,7 @@ func newServer(version string, policy *rootauth.Policy, snapshots *snapshotStore
 		output, err := getChangeScopeComparison(ctx, snapshots, input)
 		return nil, output, err
 	})
+	registerCodeGraphTools(server, policy, snapshots, factory)
 	return server
 }
 

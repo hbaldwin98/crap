@@ -1,0 +1,23 @@
+{
+  "schemaVersion": "1", "reportType": "code-graph",
+  "tool": {"name": "crap", "version": "0.2.0", "modified": false},
+  "fingerprints": {"sources": [{"path": "src/work.go", "sha256": "0000000000000000000000000000000000000000000000000000000000000000"}], "coverage": null, "nativeReport": null, "git": null, "configSha256": "1111111111111111111111111111111111111111111111111111111111111111"},
+  "coordinates": {"lineBase": 1, "columnBase": 1, "columnEncoding": "utf-8-bytes", "end": "exclusive"},
+  "grammars": [{"language": "go", "version": "v0.23.4"}], "coverage": {"format": "none"}, "discovery": {"selected": 1, "exclusions": []}, "threshold": 30,
+  "policy": {"identity": "declaration-occurrence-and-logical-module-v1", "ownership": "nearest-lexical-parent", "resolution": "bounded-selected-source-v1"},
+  "summary": {"files": 1, "modules": 1, "types": 1, "callables": 1, "nodes": 4, "containsEdges": 1, "declaresEdges": 1, "memberOfEdges": 1, "importsEdges": 0, "edges": 3, "references": 1, "resolvedReferences": 0, "unresolvedReferences": 1, "ambiguousReferences": 0, "aboveThreshold": 0},
+  "nodes": [
+    {"id": "2222222222222222222222222222222222222222222222222222222222222222", "kind": "file", "language": "go", "name": "work.go", "path": "src/work.go", "location": null, "metrics": null},
+    {"id": "3333333333333333333333333333333333333333333333333333333333333333", "kind": "type", "language": "go", "name": "work.Job", "path": "src/work.go", "declarationKind": "type", "location": {"startLine": 2, "startColumn": 1, "endLine": 2, "endColumn": 18}, "metrics": null},
+    {"id": "4444444444444444444444444444444444444444444444444444444444444444", "kind": "callable", "language": "go", "name": "work.Run", "path": "src/work.go", "declarationKind": "function", "location": {"startLine": 3, "startColumn": 1, "endLine": 3, "endColumn": 14}, "metrics": {"complexity": 1, "coveragePercent": null, "crap": 2, "aboveThreshold": false}},
+    {"id": "7777777777777777777777777777777777777777777777777777777777777777", "kind": "module", "language": "go", "name": "example.test/work", "path": "src/work.go", "location": null, "metrics": null, "module": {"system": "go-package", "name": "example.test/work", "variant": "work"}, "moduleMetrics": {"files": 1, "types": 1, "callables": 1, "complexityTotal": 1, "complexityMaximum": 1, "coverageKnown": 0, "coverageUnknown": 1, "coverageMean": null, "crapMaximum": 2, "aboveThreshold": 0}}
+  ],
+  "edges": [
+    {"id": "5555555555555555555555555555555555555555555555555555555555555555", "type": "contains", "from": "2222222222222222222222222222222222222222222222222222222222222222", "to": "3333333333333333333333333333333333333333333333333333333333333333", "resolution": "exact", "evidence": "lexical-ast", "occurrences": 1, "references": []},
+    {"id": "6666666666666666666666666666666666666666666666666666666666666666", "type": "declares", "from": "3333333333333333333333333333333333333333333333333333333333333333", "to": "4444444444444444444444444444444444444444444444444444444444444444", "resolution": "exact", "evidence": "lexical-ast", "occurrences": 1, "references": []},
+    {"id": "8888888888888888888888888888888888888888888888888888888888888888", "type": "member-of", "from": "2222222222222222222222222222222222222222222222222222222222222222", "to": "7777777777777777777777777777777777777777777777777777777777777777", "resolution": "exact", "evidence": "module-declaration", "occurrences": 1, "references": []}
+  ],
+  "references": [{"id": "9999999999999999999999999999999999999999999999999999999999999999", "kind": "go-import", "language": "go", "sourceFile": "2222222222222222222222222222222222222222222222222222222222222222", "sourceModule": "7777777777777777777777777777777777777777777777777777777777777777", "specifier": "fmt", "binding": "default", "location": {"startLine": 2, "startColumn": 8, "endLine": 2, "endColumn": 13}, "resolution": "unresolved", "candidates": [], "reason": "outside-selected-sources"}],
+  "resolutionInputs": [],
+  "limitations": ["relationships are limited to exact lexical containment"], "diagnostics": []
+}
