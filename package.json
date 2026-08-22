@@ -1,0 +1,31 @@
+{
+  "name": "crap-mcp-bootstrap",
+  "version": "0.2.0",
+  "private": true,
+  "description": "One-command bootstrap for the CRAP analysis and mutation-testing MCP servers",
+  "license": "MIT",
+  "files": [
+    "cmd/crap-install/main.go",
+    "internal/clioutput/output.go",
+    "internal/clioutput/replace_unix.go",
+    "internal/clioutput/replace_windows.go",
+    "internal/installer/claude.go",
+    "internal/installer/generic.go",
+    "internal/installer/installer.go",
+    "internal/installer/opencode.go",
+    "scripts/crap-install.mjs",
+    "scripts/crap-install-lib.mjs",
+    "LICENSE",
+    "go.mod",
+    "go.sum"
+  ],
+  "bin": {
+    "crap-install": "scripts/crap-install.mjs"
+  },
+  "scripts": {
+    "test": "node --test scripts/crap-install.test.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

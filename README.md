@@ -27,22 +27,28 @@ On Windows, install a GCC or Clang toolchain and ensure its compiler is on `PATH
 Install both binaries and configure every detected supported MCP client with one command:
 
 ```sh
-go run github.com/hbaldwin98/crap/cmd/crap-install@latest
+npx --yes github:hbaldwin98/crap
 ```
 
-The installer requires Go 1.25 or newer and a C compiler available to Go for Tree-sitter's CGO bindings. It installs `crap` and `crap-mutate` into `GOBIN`, or the first `GOPATH` entry's `bin` directory when `GOBIN` is empty. MCP configurations use absolute executable paths, so that directory does not need to be on the MCP client's `PATH`.
+The `npx` bootstrap is not installed globally or written to `GOBIN`; npm and Go may retain normal cache artifacts. It requires Node.js 20+, Go 1.25+, and a C compiler available to Go for Tree-sitter's CGO bindings. It installs only `crap` and `crap-mutate` into `GOBIN`, or the first `GOPATH` entry's `bin` directory when `GOBIN` is empty. MCP configurations use absolute executable paths, so that directory does not need to be on the MCP client's `PATH`.
 
 By default, the installer configures Claude Code and OpenCode when their executables are detected. It always writes a client-neutral MCP reference to `~/.config/crap/mcp.json` and prints that path, including when no supported client is detected. Re-running the command updates the same binaries and managed config entries.
 
 Select clients explicitly with repeatable or comma-separated `--client` flags:
 
 ```sh
-go run github.com/hbaldwin98/crap/cmd/crap-install@latest --client claude,opencode
-go run github.com/hbaldwin98/crap/cmd/crap-install@latest --client generic
-go run github.com/hbaldwin98/crap/cmd/crap-install@latest --client claude --client opencode --dry-run
+npx --yes github:hbaldwin98/crap --client claude,opencode
+npx --yes github:hbaldwin98/crap --client generic
+npx --yes github:hbaldwin98/crap --client claude --client opencode --dry-run
 ```
 
 Supported names are `claude`, `opencode`, and `generic`. Explicit `claude` selection requires the `claude` CLI. `--dry-run` prints commands and config paths without installing or writing files. `--version VERSION` installs both commands from the same validated module version and defaults to `latest`.
+
+The short command executes the repository's current default branch and installs the latest Go module revision. For a reviewable, repeatable install, replace `REVISION` with one commit hash in both positions:
+
+```sh
+npx --yes github:hbaldwin98/crap#REVISION --version REVISION
+```
 
 OpenCode honors `OPENCODE_CONFIG`, `OPENCODE_CONFIG_DIR`, and `XDG_CONFIG_HOME`. `OPENCODE_CONFIG` names one exact file. Without that override, the installer updates both `opencode.json` and `opencode.jsonc` when both exist because OpenCode loads both in that order. If neither exists, it creates `~/.config/opencode/opencode.json`. Existing unrelated settings, MCP servers, and JSONC comments are preserved. The two managed server definitions are replaced, including comments inside those definitions.
 
