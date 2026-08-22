@@ -45,6 +45,46 @@ example.com/project/sample.go:13.1,13.20 1 0
 	}
 }
 
+func TestParseGoCoverageMergesDuplicateBlocksAcrossPackages(t *testing.T) {
+	profiles := []string{
+		"mode: atomic\nexample.com/project/sample.go:10.1,12.2 2 0\nexample.com/project/sample.go:10.1,12.2 2 3\n",
+		"mode: atomic\nexample.com/project/sample.go:10.1,12.2 2 3\nexample.com/project/sample.go:10.1,12.2 2 0\n",
+	}
+	for _, profile := range profiles {
+		coverage, err := parseGoCoverage(profile)
+		if err != nil {
+			t.Fatal(err)
+		}
+		spans := coverage.forFile("sample.go").spans
+		if len(spans) != 1 || !spans[0].Covered || spans[0].Statements != 2 {
+			t.Fatalf("merged spans = %#v, want one covered two-statement block", spans)
+		}
+	}
+}
+
+func TestParseGoCoverageKeepsDistinctSameLineBlocks(t *testing.T) {
+	profile := "mode: set\n" +
+		"example.com/project/sample.go:10.1,10.5 1 1\n" +
+		"example.com/project/sample.go:10.6,10.12 2 0\n"
+	coverage, err := parseGoCoverage(profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	spans := coverage.forFile("sample.go").spans
+	if len(spans) != 2 || spans[0].StartColumn != 1 || spans[1].StartColumn != 6 {
+		t.Fatalf("same-line spans = %#v, want two coordinate-distinct blocks", spans)
+	}
+}
+
+func TestParseGoCoverageRejectsConflictingDuplicateBlocks(t *testing.T) {
+	profile := "mode: set\n" +
+		"example.com/project/sample.go:10.1,12.2 1 1\n" +
+		"example.com/project/sample.go:10.1,12.2 2 0\n"
+	if _, err := parseGoCoverage(profile); err == nil || !strings.Contains(err.Error(), "conflicting statement counts") {
+		t.Fatalf("error = %v, want conflicting statement counts", err)
+	}
+}
+
 func TestMethodCoverageExcludesBlocksCrossingCallableOwnership(t *testing.T) {
 	spans := []coverageSpan{
 		{StartLine: 10, EndLine: 12, Statements: 3, Covered: true},

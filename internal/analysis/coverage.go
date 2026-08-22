@@ -17,10 +17,12 @@ import (
 )
 
 type coverageSpan struct {
-	StartLine  int
-	EndLine    int
-	Statements int
-	Covered    bool
+	StartLine   int
+	StartColumn int
+	EndLine     int
+	EndColumn   int
+	Statements  int
+	Covered     bool
 }
 
 type coverageData struct {
@@ -49,7 +51,7 @@ type cobertura struct {
 	} `xml:"packages>package>classes>class"`
 }
 
-var goCoverageLine = regexp.MustCompile(`^(.+):(\d+)\.\d+,(\d+)\.\d+\s+(\d+)\s+(\d+)$`)
+var goCoverageLine = regexp.MustCompile(`^(.+):(\d+)\.(\d+),(\d+)\.(\d+)\s+(\d+)\s+(\d+)$`)
 
 func loadCoverage(path, root string) (coverageData, error) {
 	return loadCoverageContext(context.Background(), path, root)
@@ -205,6 +207,12 @@ func parseGoCoverageContext(ctx context.Context, content string) (coverageData, 
 		return coverageData{}, err
 	}
 	result := coverageData{files: make(map[string][]coverageSpan), loaded: true, format: "go-coverprofile"}
+	type blockLocation struct {
+		filename               string
+		startLine, startColumn int
+		endLine, endColumn     int
+	}
+	blocks := make(map[blockLocation]coverageSpan)
 	lines := strings.Split(strings.TrimSpace(content), "\n")
 	for index, raw := range lines {
 		if err := ctx.Err(); err != nil {
@@ -218,14 +226,50 @@ func parseGoCoverageContext(ctx context.Context, content string) (coverageData, 
 		if match == nil {
 			return coverageData{}, fmt.Errorf("parse Go coverprofile line %d: %q", index+1, line)
 		}
-		start, _ := strconv.Atoi(match[2])
-		end, _ := strconv.Atoi(match[3])
-		statements, _ := strconv.Atoi(match[4])
-		count, _ := strconv.Atoi(match[5])
+		startLine, _ := strconv.Atoi(match[2])
+		startColumn, _ := strconv.Atoi(match[3])
+		endLine, _ := strconv.Atoi(match[4])
+		endColumn, _ := strconv.Atoi(match[5])
+		statements, _ := strconv.Atoi(match[6])
+		count, _ := strconv.Atoi(match[7])
 		filename := normalizePortablePath(match[1])
-		result.files[filename] = append(result.files[filename], coverageSpan{
-			StartLine: start, EndLine: end, Statements: statements, Covered: count > 0,
-		})
+		location := blockLocation{filename, startLine, startColumn, endLine, endColumn}
+		if existing, ok := blocks[location]; ok {
+			if existing.Statements != statements {
+				return coverageData{}, fmt.Errorf("parse Go coverprofile line %d: block %s:%d.%d,%d.%d has conflicting statement counts", index+1, filename, startLine, startColumn, endLine, endColumn)
+			}
+			existing.Covered = existing.Covered || count > 0
+			blocks[location] = existing
+			continue
+		}
+		blocks[location] = coverageSpan{
+			StartLine: startLine, StartColumn: startColumn,
+			EndLine: endLine, EndColumn: endColumn,
+			Statements: statements, Covered: count > 0,
+		}
+	}
+	locations := make([]blockLocation, 0, len(blocks))
+	for location := range blocks {
+		locations = append(locations, location)
+	}
+	sort.Slice(locations, func(i, j int) bool {
+		left, right := locations[i], locations[j]
+		if left.filename != right.filename {
+			return left.filename < right.filename
+		}
+		if left.startLine != right.startLine {
+			return left.startLine < right.startLine
+		}
+		if left.startColumn != right.startColumn {
+			return left.startColumn < right.startColumn
+		}
+		if left.endLine != right.endLine {
+			return left.endLine < right.endLine
+		}
+		return left.endColumn < right.endColumn
+	})
+	for _, location := range locations {
+		result.files[location.filename] = append(result.files[location.filename], blocks[location])
 	}
 	if len(result.files) == 0 {
 		return coverageData{}, fmt.Errorf("Go coverprofile contains no coverage blocks")
