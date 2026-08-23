@@ -100,6 +100,7 @@ crap scope actual --diff-base REVISION [options] [path ...]
 crap compare --base REVISION [options] [path ...]
 crap graph [options] [path ...]
 crap arch [options] [path ...]
+crap calls [options] [path ...]
 crap mcp
 ```
 
@@ -300,6 +301,21 @@ crap arch --rules arch-rules.json .
 Every nontrivial strongly connected component is reported as a cycle with a deterministic edge witness: an ordered list of module dependency edges covering the component, each with the import references that justify it. Forbid rules match module names with anchored globs where `*` stays within a path segment, `**` crosses separators, `?` matches one non-separator character, and an empty pattern matches every module; `system` optionally restricts a rule to `go-package`, `ecmascript-file`, or `csharp-namespace` modules. Dependencies are allowed unless a rule forbids them.
 
 The `architecture` v1 report is pure evidence: module and edge counts, cycle witnesses, and violations sorted by `from`, `to`, and kind. Exit code `2` is returned when any violation exists, so the command works as a CI gate. Architecture analysis inherits the code graph's bounded selected-source semantics: unresolved imports are not violations, and static lexical imports never prove runtime behavior. The report and rules JSON schemas are published under [`schemas/v1`](schemas/v1).
+
+### Call Graph
+
+Build a compiler-backed call graph for the Go module containing the selected paths, and with `--diff-base` the tests affected by changed callables:
+
+```sh
+crap calls --format json .
+crap calls --diff-base origin/main --format json .
+```
+
+The command walks up from each path to the nearest `go.mod`, loads the whole module with the Go compiler (`GOWORK=off`, module mode, test variants included), and resolves call edges from compiler type information. Direct and qualified calls produce `static` edges; interface and type-parameter method calls produce `dispatch` edges expanded to every implementation declared inside the module. Calls that cannot be connected stay as explicit unresolved entries with reasons such as `builtin`, `conversion`, `function-value`, `outside-module`, or `outside-function-body`. Each edge carries the number of occurrences and up to 25 call sites with file, line, and column.
+
+Functions are joined with the deterministic callable inventory; any callable the compiler walk could not match is counted in `unmatchedCallables`. Tests are identified by `_test.go` file suffix and `Test` name prefix. When `--diff-base REVISION` is set, changed callables seed a reverse traversal over call edges, and each reachable test is reported with its minimum distance and the seeds that reach it. Affected tests are compiler-fact evidence for selecting a test run; they do not prove behavioral coverage.
+
+The `call-graph` v1 report includes the compiler and module identity with fingerprints, the resolution, dispatch, and test-identification policies, per-kind edge counts, unresolved calls, affected tests, and explicit limitations. Runtime reflection, function values, cgo calls, and implementations outside the module are not modeled. The JSON schema is published under [`schemas/v1`](schemas/v1).
 
 ## MCP Server
 
@@ -531,7 +547,7 @@ Both MCP servers publish initialization instructions that tell capable clients w
 
 ## Report Contracts
 
-JSON outputs carry `reportType`, `schemaVersion`, one shared tool version, coordinate semantics, and deterministic fingerprints. Analysis is v6, actual change scope is v1, change-scope comparison is v1, code graph and code-graph neighborhoods are v1, architecture reports and rules inputs are v1, mutation is v3, mutation plans are v2, and mutation doctor output has its independent v1 contract. Incompatible changes increment the contract that changed; MCP envelope versions are independent from their underlying report versions. Analysis v5 added Go function literals and C# lambdas, anonymous methods, and expression-bodied properties/indexers. Analysis v6 adds deterministic source-discovery policy and metadata.
+JSON outputs carry `reportType`, `schemaVersion`, one shared tool version, coordinate semantics, and deterministic fingerprints. Analysis is v6, actual change scope is v1, change-scope comparison is v1, code graph and code-graph neighborhoods are v1, architecture reports and rules inputs are v1, Go call graphs are v1, mutation is v3, mutation plans are v2, and mutation doctor output has its independent v1 contract. Incompatible changes increment the contract that changed; MCP envelope versions are independent from their underlying report versions. Analysis v5 added Go function literals and C# lambdas, anonymous methods, and expression-bodied properties/indexers. Analysis v6 adds deterministic source-discovery policy and metadata.
 
 Normalized analysis coordinates are 1-based UTF-8 byte columns with exclusive ends. Normalized mutation coordinates remain engine-native. SARIF is a separate presentation contract and converts or validates both forms as 1-based UTF-16 code units for GitHub. Analysis callable names, signatures, and ranges come from the language AST. Callable IDs hash language, normalized file path, kind, lexical signature, and same-signature occurrence, so inserting blank lines above a callable does not change its ID. Mutation wrapper IDs hash normalized file, range, mutator, and replacement; Stryker's `nativeId` and status do not affect them.
 
@@ -547,9 +563,9 @@ Change intelligence will grow from deterministic evidence rather than inferred i
 2. Completed: lexical language-neutral file, type-declaration, and callable inventory.
 3. Completed: bounded selected-source module dependency graph with explicit unresolved references.
 4. Completed: AI-consumable `crap graph` JSON and text structural contract.
-5. Completed: architecture rules and cycle proofs.
-6. Next: compiler-backed call relationships and affected-test traversal.
-7. Unified change oracle joining scope, quality, tests, and architecture evidence.
+ 5. Completed: architecture rules and cycle proofs.
+ 6. Completed: compiler-backed call relationships and affected-test traversal for Go modules.
+ 7. Next: unified change oracle joining scope, quality, tests, and architecture evidence.
 
 Each phase must keep engine facts, unresolved edges, and AI or user judgment distinct.
 

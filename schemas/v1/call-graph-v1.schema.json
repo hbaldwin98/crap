@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "call-graph-v1.schema.json",
+  "$defs": {
+    "grammar": {"oneOf": [{"const": {"language": "csharp", "version": "v0.23.5"}}, {"const": {"language": "go", "version": "v0.23.4"}}, {"const": {"language": "typescript", "version": "v0.23.2"}}, {"const": {"language": "tsx", "version": "v0.23.2"}}]},
+    "compiler": {"type": "object", "required": ["name", "version"], "properties": {"name": {"const": "go"}, "version": {"type": "string", "minLength": 1}}, "additionalProperties": false},
+    "module": {"type": "object", "required": ["path", "sha256"], "properties": {"path": {"type": "string", "minLength": 1}, "goVersion": {"type": "string", "minLength": 1}, "sha256": {"$ref": "common.schema.json#/$defs/digest"}}, "additionalProperties": false},
+    "policy": {"type": "object", "required": ["resolution", "dispatch", "tests"], "properties": {"resolution": {"const": "compiler-types-info-v1"}, "dispatch": {"const": "bounded-in-module-implementations-v1"}, "tests": {"const": "test-file-and-name-prefix-v1"}}, "additionalProperties": false},
+    "summary": {"type": "object", "required": ["packages", "functions", "unmatchedCallables", "tests", "edges", "staticEdges", "dispatchEdges", "callSites", "unresolvedCalls", "changedCallables", "affectedTests", "truncatedCallSites", "truncatedUnresolved"], "properties": {"packages": {"type": "integer", "minimum": 0}, "functions": {"type": "integer", "minimum": 0}, "unmatchedCallables": {"type": "integer", "minimum": 0}, "tests": {"type": "integer", "minimum": 0}, "edges": {"type": "integer", "minimum": 0}, "staticEdges": {"type": "integer", "minimum": 0}, "dispatchEdges": {"type": "integer", "minimum": 0}, "callSites": {"type": "integer", "minimum": 0}, "unresolvedCalls": {"type": "integer", "minimum": 0}, "changedCallables": {"type": "integer", "minimum": 0}, "affectedTests": {"type": "integer", "minimum": 0}, "truncatedCallSites": {"type": "boolean"}, "truncatedUnresolved": {"type": "boolean"}}, "additionalProperties": false},
+    "function": {"type": "object", "required": ["id", "name", "kind", "file", "package", "test", "changed", "startLine", "startColumn", "endLine", "endColumn"], "properties": {"id": {"$ref": "common.schema.json#/$defs/digest"}, "name": {"type": "string", "minLength": 1}, "kind": {"type": "string", "minLength": 1}, "file": {"$ref": "common.schema.json#/$defs/relativePath"}, "package": {"type": "string", "minLength": 1}, "compilerName": {"type": "string", "minLength": 1}, "test": {"type": "boolean"}, "changed": {"type": "boolean"}, "startLine": {"type": "integer", "minimum": 1}, "startColumn": {"type": "integer", "minimum": 1}, "endLine": {"type": "integer", "minimum": 1}, "endColumn": {"type": "integer", "minimum": 1}}, "additionalProperties": false},
+    "callSite": {"type": "object", "required": ["path", "line", "column"], "properties": {"path": {"$ref": "common.schema.json#/$defs/relativePath"}, "line": {"type": "integer", "minimum": 1}, "column": {"type": "integer", "minimum": 1}}, "additionalProperties": false},
+    "edge": {"type": "object", "required": ["id", "kind", "from", "to", "occurrences", "callSites"], "properties": {"id": {"$ref": "common.schema.json#/$defs/digest"}, "kind": {"enum": ["static", "dispatch"]}, "from": {"$ref": "common.schema.json#/$defs/digest"}, "to": {"$ref": "common.schema.json#/$defs/digest"}, "occurrences": {"type": "integer", "minimum": 1}, "callSites": {"type": "array", "maxItems": 25, "items": {"$ref": "#/$defs/callSite"}}}, "additionalProperties": false},
+    "unresolvedCall": {"type": "object", "required": ["path", "line", "column", "reason"], "properties": {"caller": {"$ref": "common.schema.json#/$defs/digest"}, "path": {"$ref": "common.schema.json#/$defs/relativePath"}, "line": {"type": "integer", "minimum": 1}, "column": {"type": "integer", "minimum": 1}, "reason": {"enum": ["outside-function-body", "outside-module", "builtin", "conversion", "function-value", "not-in-inventory", "no-in-module-implementations"]}}, "additionalProperties": false},
+    "affectedTest": {"type": "object", "required": ["test", "name", "file", "distance", "seeds"], "properties": {"test": {"$ref": "common.schema.json#/$defs/digest"}, "name": {"type": "string", "minLength": 1}, "file": {"$ref": "common.schema.json#/$defs/relativePath"}, "distance": {"type": "integer", "minimum": 1}, "seeds": {"type": "array", "minItems": 1, "items": {"$ref": "common.schema.json#/$defs/digest"}}}, "additionalProperties": false}
+  },
+  "type": "object",
+  "required": ["schemaVersion", "reportType", "tool", "compiler", "module", "fingerprints", "coordinates", "grammars", "policy", "summary", "functions", "edges", "unresolvedCalls", "affectedTests", "limitations", "diagnostics"],
+  "properties": {
+    "schemaVersion": {"const": "1"}, "reportType": {"const": "call-graph"},
+    "tool": {"$ref": "common.schema.json#/$defs/tool"}, "compiler": {"$ref": "#/$defs/compiler"}, "module": {"$ref": "#/$defs/module"},
+    "fingerprints": {"$ref": "common.schema.json#/$defs/fingerprints"}, "coordinates": {"$ref": "common.schema.json#/$defs/coordinates"},
+    "grammars": {"type": "array", "items": {"$ref": "#/$defs/grammar"}},
+    "diffBase": {"type": "string", "minLength": 1}, "baseCommit": {"type": "string", "minLength": 1}, "headCommit": {"type": "string", "minLength": 1}, "mergeBase": {"type": "string", "minLength": 1},
+    "policy": {"$ref": "#/$defs/policy"}, "summary": {"$ref": "#/$defs/summary"},
+    "functions": {"type": "array", "items": {"$ref": "#/$defs/function"}},
+    "edges": {"type": "array", "maxItems": 250000, "items": {"$ref": "#/$defs/edge"}},
+    "unresolvedCalls": {"type": "array", "maxItems": 5000, "items": {"$ref": "#/$defs/unresolvedCall"}},
+    "affectedTests": {"type": "array", "items": {"$ref": "#/$defs/affectedTest"}},
+    "limitations": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+    "diagnostics": {"type": "array", "items": {"$ref": "common.schema.json#/$defs/diagnostic"}}
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,35 @@
+{
+  "schemaVersion": "1", "reportType": "call-graph",
+  "tool": {"name": "crap", "version": "1.2.3", "modified": false},
+  "compiler": {"name": "go", "version": "go1.25.0"},
+  "module": {"path": "example.com/calls", "goVersion": "1.25.0", "sha256": "1111111111111111111111111111111111111111111111111111111111111111"},
+  "fingerprints": {
+    "sources": [{"path": "work.go", "sha256": "2222222222222222222222222222222222222222222222222222222222222222"}],
+    "coverage": null, "nativeReport": null, "git": null,
+    "configSha256": "3333333333333333333333333333333333333333333333333333333333333333"
+  },
+  "coordinates": {"lineBase": 1, "columnBase": 1, "columnEncoding": "utf-8-bytes", "end": "exclusive"},
+  "grammars": [{"language": "go", "version": "v0.23.4"}],
+  "diffBase": "HEAD~1",
+  "policy": {"resolution": "compiler-types-info-v1", "dispatch": "bounded-in-module-implementations-v1", "tests": "test-file-and-name-prefix-v1"},
+  "summary": {"packages": 2, "functions": 12, "unmatchedCallables": 0, "tests": 2, "edges": 9, "staticEdges": 7, "dispatchEdges": 2, "callSites": 9, "unresolvedCalls": 9, "changedCallables": 1, "affectedTests": 1, "truncatedCallSites": false, "truncatedUnresolved": false},
+  "functions": [
+    {"id": "4444444444444444444444444444444444444444444444444444444444444444", "name": "work", "kind": "function", "file": "work.go", "package": "example.com/calls", "compilerName": "example.com/calls.work", "test": false, "changed": true, "startLine": 3, "startColumn": 1, "endLine": 5, "endColumn": 2},
+    {"id": "5555555555555555555555555555555555555555555555555555555555555555", "name": "TestWork", "kind": "function", "file": "work_test.go", "package": "example.com/calls", "compilerName": "example.com/calls.TestWork", "test": true, "changed": false, "startLine": 5, "startColumn": 1, "endLine": 9, "endColumn": 2}
+  ],
+  "edges": [
+    {"id": "6666666666666666666666666666666666666666666666666666666666666666", "kind": "static", "from": "5555555555555555555555555555555555555555555555555555555555555555", "to": "4444444444444444444444444444444444444444444444444444444444444444", "occurrences": 1, "callSites": [{"path": "work_test.go", "line": 6, "column": 7}]}
+  ],
+  "unresolvedCalls": [
+    {"caller": "4444444444444444444444444444444444444444444444444444444444444444", "path": "work.go", "line": 4, "column": 10, "reason": "outside-module"}
+  ],
+  "affectedTests": [
+    {"test": "5555555555555555555555555555555555555555555555555555555555555555", "name": "TestWork", "file": "work_test.go", "distance": 1, "seeds": ["4444444444444444444444444444444444444444444444444444444444444444"]}
+  ],
+  "limitations": [
+    "call edges are resolved from compiler type information; runtime behavior and reflection are not modeled",
+    "interface and type-parameter dispatch expands only to implementations declared in the analyzed Go module",
+    "affected tests are bounded by compiler facts and do not prove full behavioral coverage"
+  ],
+  "diagnostics": []
+}

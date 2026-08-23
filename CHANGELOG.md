@@ -28,6 +28,11 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   with anchored glob matching, deterministic strongly-connected-component cycle
   witnesses backed by import references, an exit code usable as a CI gate, and
   published v1 JSON schemas for reports and rules inputs.
+- Compiler-backed call graphs through `crap calls` for Go modules: static and
+  bounded-dispatch call edges resolved from compiler type information with
+  capped call-site evidence, explicit unresolved calls, and reverse traversal
+  from changed callables to affected tests via `--diff-base`, with a published
+  v1 JSON schema.
 
 ### Changed
 

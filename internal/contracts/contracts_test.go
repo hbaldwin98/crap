@@ -38,6 +38,7 @@ var contractFixtures = map[string]string{
 	"code-graph-neighborhood-mcp-v1.schema.json": "code-graph-neighborhood-mcp-v1.json",
 	"architecture-v1.schema.json":                "architecture-v1.json",
 	"architecture-rules-v1.schema.json":          "architecture-rules-v1.json",
+	"call-graph-v1.schema.json":                  "call-graph-v1.json",
 }
 
 func TestGoldenContractFixtures(t *testing.T) {
@@ -125,6 +126,15 @@ func TestGeneratedAnalysisAndPlanValidate(t *testing.T) {
 		t.Fatal(err)
 	}
 	validateValue(t, filepath.Join(root, "schemas", "v1", "mutation-plan-v2.schema.json"), plan)
+
+	if err := os.WriteFile(filepath.Join(project, "go.mod"), []byte("module example.com/contract\n\ngo 1.25.0\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	calls, err := analyzer.AnalyzeCallGraph(analysis.CallGraphOptions{Root: project, Paths: []string{"work.go"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	validateValue(t, filepath.Join(root, "schemas", "v1", "call-graph-v1.schema.json"), calls)
 }
 
 func runGit(t *testing.T, root string, arguments ...string) {
