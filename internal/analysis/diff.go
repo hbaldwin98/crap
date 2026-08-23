@@ -279,6 +279,25 @@ func parseDiff(diff string) (map[string][]lineRange, error) {
 	return parseDiffContext(context.Background(), diff)
 }
 
+func advanceHunkRemainders(line string, oldRemaining, newRemaining *int) error {
+	if *oldRemaining > 0 || *newRemaining > 0 {
+		switch {
+		case strings.HasPrefix(line, "\\ No newline at end of file"):
+		case strings.HasPrefix(line, "+"):
+			*newRemaining--
+		case strings.HasPrefix(line, "-"):
+			*oldRemaining--
+		default:
+			*oldRemaining--
+			*newRemaining--
+		}
+		if *oldRemaining < 0 || *newRemaining < 0 {
+			return fmt.Errorf("hunk body exceeds declared line counts")
+		}
+	}
+	return nil
+}
+
 func parseDiffContext(ctx context.Context, diff string) (map[string][]lineRange, error) {
 	result := make(map[string][]lineRange)
 	var currentFile string
@@ -287,62 +306,28 @@ func parseDiffContext(ctx context.Context, diff string) (map[string][]lineRange,
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
+		if err := advanceHunkRemainders(line, &oldRemaining, &newRemaining); err != nil {
+			return nil, err
+		}
 		if oldRemaining > 0 || newRemaining > 0 {
-			switch {
-			case strings.HasPrefix(line, "\\ No newline at end of file"):
-			case strings.HasPrefix(line, "+"):
-				newRemaining--
-			case strings.HasPrefix(line, "-"):
-				oldRemaining--
-			default:
-				oldRemaining--
-				newRemaining--
-			}
-			if oldRemaining < 0 || newRemaining < 0 {
-				return nil, fmt.Errorf("hunk body exceeds declared line counts")
-			}
 			continue
 		}
-		if strings.HasPrefix(line, "+++ ") {
-			filename, deleted, err := parseGitDestination(line)
-			if err != nil {
-				return nil, err
-			}
-			if deleted {
-				currentFile = ""
-				continue
-			}
-			currentFile = filename
-			continue
-		}
-		match := hunkHeader.FindStringSubmatch(line)
-		if strings.HasPrefix(line, "@@ ") && match == nil {
-			return nil, fmt.Errorf("invalid hunk header %q", line)
-		}
-		if currentFile == "" || match == nil {
-			continue
-		}
-		oldCount, err := hunkCount(match[2])
+		handled, err := parseDiffDestination(line, &currentFile)
 		if err != nil {
 			return nil, err
 		}
-		start, err := strconv.Atoi(match[3])
-		if err != nil {
-			return nil, fmt.Errorf("invalid hunk start %q", match[3])
+		if handled {
+			continue
 		}
-		count, err := hunkCount(match[4])
+		oldCount, newCount, rng, matched, err := parseDiffHunkHeader(line, currentFile)
 		if err != nil {
 			return nil, err
 		}
-		oldRemaining, newRemaining = oldCount, count
-		if count == 0 {
-			if start < 1 {
-				start = 1
-			}
-			result[currentFile] = append(result[currentFile], lineRange{Start: start, End: start})
+		if !matched {
 			continue
 		}
-		result[currentFile] = append(result[currentFile], lineRange{Start: start, End: start + count - 1})
+		oldRemaining, newRemaining = oldCount, newCount
+		result[currentFile] = append(result[currentFile], rng)
 	}
 	if oldRemaining != 0 || newRemaining != 0 {
 		return nil, fmt.Errorf("hunk body ended before declared line counts")
@@ -351,6 +336,51 @@ func parseDiffContext(ctx context.Context, diff string) (map[string][]lineRange,
 		result[filename] = mergeRanges(ranges)
 	}
 	return result, nil
+}
+
+func parseDiffDestination(line string, currentFile *string) (bool, error) {
+	if !strings.HasPrefix(line, "+++ ") {
+		return false, nil
+	}
+	filename, deleted, err := parseGitDestination(line)
+	if err != nil {
+		return false, err
+	}
+	if deleted {
+		*currentFile = ""
+		return true, nil
+	}
+	*currentFile = filename
+	return true, nil
+}
+
+func parseDiffHunkHeader(line, currentFile string) (int, int, lineRange, bool, error) {
+	match := hunkHeader.FindStringSubmatch(line)
+	if strings.HasPrefix(line, "@@ ") && match == nil {
+		return 0, 0, lineRange{}, false, fmt.Errorf("invalid hunk header %q", line)
+	}
+	if currentFile == "" || match == nil {
+		return 0, 0, lineRange{}, false, nil
+	}
+	oldCount, err := hunkCount(match[2])
+	if err != nil {
+		return 0, 0, lineRange{}, false, err
+	}
+	start, err := strconv.Atoi(match[3])
+	if err != nil {
+		return 0, 0, lineRange{}, false, fmt.Errorf("invalid hunk start %q", match[3])
+	}
+	count, err := hunkCount(match[4])
+	if err != nil {
+		return 0, 0, lineRange{}, false, err
+	}
+	if count == 0 {
+		if start < 1 {
+			start = 1
+		}
+		return oldCount, 0, lineRange{Start: start, End: start}, true, nil
+	}
+	return oldCount, count, lineRange{Start: start, End: start + count - 1}, true, nil
 }
 
 func hunkCount(value string) (int, error) {

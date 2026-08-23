@@ -40,15 +40,19 @@ type coverageMatch struct {
 	identities []string
 }
 
+type coberturaLine struct {
+	Number int    `xml:"number,attr"`
+	Hits   string `xml:"hits,attr"`
+}
+
+type coberturaClass struct {
+	Filename string          `xml:"filename,attr"`
+	Lines    []coberturaLine `xml:"lines>line"`
+}
+
 type cobertura struct {
-	Sources []string `xml:"sources>source"`
-	Classes []struct {
-		Filename string `xml:"filename,attr"`
-		Lines    []struct {
-			Number int    `xml:"number,attr"`
-			Hits   string `xml:"hits,attr"`
-		} `xml:"lines>line"`
-	} `xml:"packages>package>classes>class"`
+	Sources []string         `xml:"sources>source"`
+	Classes []coberturaClass `xml:"packages>package>classes>class"`
 }
 
 var goCoverageLine = regexp.MustCompile(`^(.+):(\d+)\.(\d+),(\d+)\.(\d+)\s+(\d+)\s+(\d+)$`)
@@ -100,43 +104,58 @@ func parseCoberturaContext(ctx context.Context, data []byte, root string) (cover
 		if err := ctx.Err(); err != nil {
 			return coverageData{}, err
 		}
-		filename, classAliases := coberturaIdentities(class.Filename, document.Sources, root)
-		if filename == "." || filename == "" {
-			return coverageData{}, fmt.Errorf("Cobertura class has an empty filename")
-		}
-		if merged[filename] == nil {
-			merged[filename] = make(map[int]bool)
-		}
-		for _, alias := range classAliases {
-			aliases[alias] = appendUnique(aliases[alias], filename)
-		}
-		for _, line := range class.Lines {
-			if err := ctx.Err(); err != nil {
-				return coverageData{}, err
-			}
-			if line.Number < 1 {
-				return coverageData{}, fmt.Errorf("Cobertura class %q has invalid line %d", class.Filename, line.Number)
-			}
-			hits, err := strconv.Atoi(line.Hits)
-			if err != nil || hits < 0 {
-				return coverageData{}, fmt.Errorf("Cobertura class %q line %d has invalid hits %q", class.Filename, line.Number, line.Hits)
-			}
-			merged[filename][line.Number] = merged[filename][line.Number] || hits > 0
-		}
-	}
-	result := coverageData{files: make(map[string][]coverageSpan), aliases: aliases, loaded: true, format: "cobertura"}
-	for filename, lines := range merged {
-		if err := ctx.Err(); err != nil {
+		if err := mergeCoberturaClass(ctx, class, document.Sources, root, merged, aliases); err != nil {
 			return coverageData{}, err
 		}
-		for line, covered := range lines {
-			result.files[filename] = append(result.files[filename], coverageSpan{StartLine: line, EndLine: line, Statements: 1, Covered: covered})
-		}
 	}
-	if len(result.files) == 0 {
+	files, err := coberturaSpans(ctx, merged)
+	if err != nil {
+		return coverageData{}, err
+	}
+	if len(files) == 0 {
 		return coverageData{}, fmt.Errorf("coverage report contains no Cobertura class lines")
 	}
-	return result, nil
+	return coverageData{files: files, aliases: aliases, loaded: true, format: "cobertura"}, nil
+}
+
+func mergeCoberturaClass(ctx context.Context, class coberturaClass, sources []string, root string, merged map[string]map[int]bool, aliases map[string][]string) error {
+	filename, classAliases := coberturaIdentities(class.Filename, sources, root)
+	if filename == "." || filename == "" {
+		return fmt.Errorf("Cobertura class has an empty filename")
+	}
+	if merged[filename] == nil {
+		merged[filename] = make(map[int]bool)
+	}
+	for _, alias := range classAliases {
+		aliases[alias] = appendUnique(aliases[alias], filename)
+	}
+	for _, line := range class.Lines {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if line.Number < 1 {
+			return fmt.Errorf("Cobertura class %q has invalid line %d", class.Filename, line.Number)
+		}
+		hits, err := strconv.Atoi(line.Hits)
+		if err != nil || hits < 0 {
+			return fmt.Errorf("Cobertura class %q line %d has invalid hits %q", class.Filename, line.Number, line.Hits)
+		}
+		merged[filename][line.Number] = merged[filename][line.Number] || hits > 0
+	}
+	return nil
+}
+
+func coberturaSpans(ctx context.Context, merged map[string]map[int]bool) (map[string][]coverageSpan, error) {
+	files := make(map[string][]coverageSpan)
+	for filename, lines := range merged {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		for line, covered := range lines {
+			files[filename] = append(files[filename], coverageSpan{StartLine: line, EndLine: line, Statements: 1, Covered: covered})
+		}
+	}
+	return files, nil
 }
 
 func coberturaIdentities(filename string, sources []string, root string) (string, []string) {
@@ -202,21 +221,36 @@ func parseGoCoverage(content string) (coverageData, error) {
 	return parseGoCoverageContext(context.Background(), content)
 }
 
+type goCoverageBlockLocation struct {
+	filename               string
+	startLine, startColumn int
+	endLine, endColumn     int
+}
+
 func parseGoCoverageContext(ctx context.Context, content string) (coverageData, error) {
 	if err := ctx.Err(); err != nil {
 		return coverageData{}, err
 	}
-	result := coverageData{files: make(map[string][]coverageSpan), loaded: true, format: "go-coverprofile"}
-	type blockLocation struct {
-		filename               string
-		startLine, startColumn int
-		endLine, endColumn     int
+	blocks, err := parseGoCoverageBlocks(ctx, content)
+	if err != nil {
+		return coverageData{}, err
 	}
-	blocks := make(map[blockLocation]coverageSpan)
+	result := coverageData{files: make(map[string][]coverageSpan), loaded: true, format: "go-coverprofile"}
+	for _, location := range sortedGoCoverageBlocks(blocks) {
+		result.files[location.filename] = append(result.files[location.filename], blocks[location])
+	}
+	if len(result.files) == 0 {
+		return coverageData{}, fmt.Errorf("Go coverprofile contains no coverage blocks")
+	}
+	return result, nil
+}
+
+func parseGoCoverageBlocks(ctx context.Context, content string) (map[goCoverageBlockLocation]coverageSpan, error) {
+	blocks := make(map[goCoverageBlockLocation]coverageSpan)
 	lines := strings.Split(strings.TrimSpace(content), "\n")
 	for index, raw := range lines {
 		if err := ctx.Err(); err != nil {
-			return coverageData{}, err
+			return nil, err
 		}
 		line := strings.TrimSpace(raw)
 		if index == 0 && strings.HasPrefix(line, "mode:") {
@@ -224,7 +258,7 @@ func parseGoCoverageContext(ctx context.Context, content string) (coverageData, 
 		}
 		match := goCoverageLine.FindStringSubmatch(line)
 		if match == nil {
-			return coverageData{}, fmt.Errorf("parse Go coverprofile line %d: %q", index+1, line)
+			return nil, fmt.Errorf("parse Go coverprofile line %d: %q", index+1, line)
 		}
 		startLine, _ := strconv.Atoi(match[2])
 		startColumn, _ := strconv.Atoi(match[3])
@@ -233,10 +267,10 @@ func parseGoCoverageContext(ctx context.Context, content string) (coverageData, 
 		statements, _ := strconv.Atoi(match[6])
 		count, _ := strconv.Atoi(match[7])
 		filename := normalizePortablePath(match[1])
-		location := blockLocation{filename, startLine, startColumn, endLine, endColumn}
+		location := goCoverageBlockLocation{filename, startLine, startColumn, endLine, endColumn}
 		if existing, ok := blocks[location]; ok {
 			if existing.Statements != statements {
-				return coverageData{}, fmt.Errorf("parse Go coverprofile line %d: block %s:%d.%d,%d.%d has conflicting statement counts", index+1, filename, startLine, startColumn, endLine, endColumn)
+				return nil, fmt.Errorf("parse Go coverprofile line %d: block %s:%d.%d,%d.%d has conflicting statement counts", index+1, filename, startLine, startColumn, endLine, endColumn)
 			}
 			existing.Covered = existing.Covered || count > 0
 			blocks[location] = existing
@@ -248,7 +282,11 @@ func parseGoCoverageContext(ctx context.Context, content string) (coverageData, 
 			Statements: statements, Covered: count > 0,
 		}
 	}
-	locations := make([]blockLocation, 0, len(blocks))
+	return blocks, nil
+}
+
+func sortedGoCoverageBlocks(blocks map[goCoverageBlockLocation]coverageSpan) []goCoverageBlockLocation {
+	locations := make([]goCoverageBlockLocation, 0, len(blocks))
 	for location := range blocks {
 		locations = append(locations, location)
 	}
@@ -268,13 +306,7 @@ func parseGoCoverageContext(ctx context.Context, content string) (coverageData, 
 		}
 		return left.endColumn < right.endColumn
 	})
-	for _, location := range locations {
-		result.files[location.filename] = append(result.files[location.filename], blocks[location])
-	}
-	if len(result.files) == 0 {
-		return coverageData{}, fmt.Errorf("Go coverprofile contains no coverage blocks")
-	}
-	return result, nil
+	return locations
 }
 
 func (coverage coverageData) forFile(file string) coverageMatch {
@@ -322,85 +354,119 @@ func (coverage coverageData) matchFiles(files []string) []coverageMatch {
 	return matches
 }
 
+func (coverage coverageData) collectCandidatesForRank(ctx context.Context, files []string, assigned []bool, claimed map[string]bool, rank int) (map[int][]string, map[string][]int, error) {
+	candidates := make(map[int][]string)
+	claimants := make(map[string][]int)
+	for index, file := range files {
+		if err := ctx.Err(); err != nil {
+			return nil, nil, err
+		}
+		if assigned[index] {
+			continue
+		}
+		identities, err := coverage.matchingIdentitiesContext(ctx, file, rank)
+		if err != nil {
+			return nil, nil, err
+		}
+		for _, identity := range identities {
+			if !claimed[identity] {
+				candidates[index] = append(candidates[index], identity)
+				claimants[identity] = append(claimants[identity], index)
+			}
+		}
+	}
+	return candidates, claimants, nil
+}
+
+func (coverage coverageData) findUniqueAllocations(candidates map[int][]string, claimants map[string][]int) map[int]string {
+	allocations := make(map[int]string)
+	for identity, indexes := range claimants {
+		only := -1
+		for _, index := range indexes {
+			if len(candidates[index]) != 1 {
+				continue
+			}
+			if only != -1 {
+				only = -2
+				break
+			}
+			only = index
+		}
+		if only >= 0 {
+			allocations[only] = identity
+		}
+	}
+	return allocations
+}
+
 func (coverage coverageData) matchFilesContext(ctx context.Context, files []string) ([]coverageMatch, error) {
 	matches := make([]coverageMatch, len(files))
 	if !coverage.loaded {
-		for index := range matches {
-			if err := ctx.Err(); err != nil {
-				return nil, err
-			}
-			matches[index].kind = "absent"
+		if err := markAbsentMatches(ctx, matches); err != nil {
+			return nil, err
 		}
 		return matches, nil
 	}
 	assigned := make([]bool, len(files))
 	claimed := make(map[string]bool)
 	for rank := 3; rank >= 1; rank-- {
-		for {
-			if err := ctx.Err(); err != nil {
-				return nil, err
-			}
-			candidates := make(map[int][]string)
-			claimants := make(map[string][]int)
-			for index, file := range files {
-				if err := ctx.Err(); err != nil {
-					return nil, err
-				}
-				if assigned[index] {
-					continue
-				}
-				identities, err := coverage.matchingIdentitiesContext(ctx, file, rank)
-				if err != nil {
-					return nil, err
-				}
-				for _, identity := range identities {
-					if !claimed[identity] {
-						candidates[index] = append(candidates[index], identity)
-						claimants[identity] = append(claimants[identity], index)
-					}
-				}
-			}
-			allocations := make(map[int]string)
-			for identity, indexes := range claimants {
-				only := -1
-				for _, index := range indexes {
-					if len(candidates[index]) != 1 {
-						continue
-					}
-					if only != -1 {
-						only = -2
-						break
-					}
-					only = index
-				}
-				if only >= 0 {
-					allocations[only] = identity
-				}
-			}
-			if len(allocations) == 0 {
-				for index, identities := range candidates {
-					if len(identities) == 0 {
-						continue
-					}
-					sort.Strings(identities)
-					matches[index] = coverageMatch{kind: "ambiguous", candidates: append([]string(nil), identities...)}
-					assigned[index] = true
-				}
-				break
-			}
-			for index, identity := range allocations {
-				claimed[identity] = true
-				assigned[index] = true
-				matches[index] = coverageMatch{spans: coverage.files[identity], kind: coverageMatchKind(rank), identities: []string{identity}}
-			}
+		if err := coverage.matchFilesAtRank(ctx, files, matches, assigned, claimed, rank); err != nil {
+			return nil, err
 		}
 	}
+	markUnmatchedMatches(matches, assigned)
+	return matches, nil
+}
+
+func markAbsentMatches(ctx context.Context, matches []coverageMatch) error {
+	for index := range matches {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		matches[index].kind = "absent"
+	}
+	return nil
+}
+
+func markUnmatchedMatches(matches []coverageMatch, assigned []bool) {
 	for index := range matches {
 		if !assigned[index] {
 			matches[index].kind = "unmatched"
 		}
 	}
-	return matches, nil
+}
+
+func (coverage coverageData) matchFilesAtRank(ctx context.Context, files []string, matches []coverageMatch, assigned []bool, claimed map[string]bool, rank int) error {
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		candidates, claimants, err := coverage.collectCandidatesForRank(ctx, files, assigned, claimed, rank)
+		if err != nil {
+			return err
+		}
+		allocations := coverage.findUniqueAllocations(candidates, claimants)
+		if len(allocations) == 0 {
+			markAmbiguousMatches(candidates, matches, assigned)
+			return nil
+		}
+		for index, identity := range allocations {
+			claimed[identity] = true
+			assigned[index] = true
+			matches[index] = coverageMatch{spans: coverage.files[identity], kind: coverageMatchKind(rank), identities: []string{identity}}
+		}
+	}
+}
+
+func markAmbiguousMatches(candidates map[int][]string, matches []coverageMatch, assigned []bool) {
+	for index, identities := range candidates {
+		if len(identities) == 0 {
+			continue
+		}
+		sort.Strings(identities)
+		matches[index] = coverageMatch{kind: "ambiguous", candidates: append([]string(nil), identities...)}
+		assigned[index] = true
+	}
 }
 
 func (coverage coverageData) matchingIdentities(file string, rank int) []string {
@@ -457,6 +523,23 @@ func coverageMatchKind(rank int) string {
 }
 
 func matchingCoveragePaths(coverage coverageData, target string, fold bool, excluded map[string]bool) ([]string, []string) {
+	identities := coverageCoverageIdentities(coverage)
+	matches := make(map[string]string)
+	for identity, canonical := range identities {
+		if excluded[canonical] {
+			continue
+		}
+		candidate, _, _ := strings.Cut(identity, "\x00")
+		if pathMatchesTarget(candidate, target, fold) {
+			if previous, exists := matches[canonical]; !exists || candidate < previous {
+				matches[canonical] = candidate
+			}
+		}
+	}
+	return sortedCoverageMatches(matches)
+}
+
+func coverageCoverageIdentities(coverage coverageData) map[string]string {
 	identities := make(map[string]string)
 	for candidate := range coverage.files {
 		identities[candidate] = candidate
@@ -466,22 +549,18 @@ func matchingCoveragePaths(coverage coverageData, target string, fold bool, excl
 			identities[alias+"\x00"+canonical] = canonical
 		}
 	}
-	matches := make(map[string]string)
-	for identity, canonical := range identities {
-		if excluded[canonical] {
-			continue
-		}
-		candidate, _, _ := strings.Cut(identity, "\x00")
-		left, right := candidate, target
-		if fold {
-			left, right = strings.ToLower(left), strings.ToLower(right)
-		}
-		if left == right || strings.HasSuffix(left, "/"+right) || strings.HasSuffix(right, "/"+left) {
-			if previous, exists := matches[canonical]; !exists || candidate < previous {
-				matches[canonical] = candidate
-			}
-		}
+	return identities
+}
+
+func pathMatchesTarget(candidate, target string, fold bool) bool {
+	left, right := candidate, target
+	if fold {
+		left, right = strings.ToLower(left), strings.ToLower(right)
 	}
+	return left == right || strings.HasSuffix(left, "/"+right) || strings.HasSuffix(right, "/"+left)
+}
+
+func sortedCoverageMatches(matches map[string]string) ([]string, []string) {
 	candidates := make([]string, 0, len(matches))
 	canonicals := make([]string, 0, len(matches))
 	for canonical, candidate := range matches {

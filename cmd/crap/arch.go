@@ -41,41 +41,10 @@ func runArchitecture(args []string, stdout, stderr io.Writer) int {
 			return 1
 		}
 	}
-	root, err := os.Getwd()
-	if err != nil {
-		fmt.Fprintf(stderr, "crap: determine working directory: %v\n", err)
+	report, ok := analyzeArchitecture(options, stderr)
+	if !ok {
 		return 1
 	}
-	analyzer, err := analysis.NewAnalyzer()
-	if err != nil {
-		fmt.Fprintf(stderr, "crap: %v\n", err)
-		return 1
-	}
-	defer analyzer.Close()
-	graph, err := analyzer.AnalyzeCodeGraph(analysis.CodeGraphOptions{
-		Root: root, Paths: options.paths, CoveragePath: options.coverage, CRAPThreshold: options.threshold,
-		IncludeTests: options.includeTests, IncludeGenerated: options.includeGenerated, Exclude: options.excludes, StrictCoverage: options.strictCoverage,
-	})
-	if err != nil {
-		fmt.Fprintf(stderr, "crap: %v\n", err)
-		return 1
-	}
-
-	rules := analysis.ArchitectureRules{}
-	if options.rulesFile != "" {
-		parsed, ok := parseArchitectureRules(options.rulesFile, stderr)
-		if !ok {
-			return 1
-		}
-		rules = parsed
-	}
-
-	report, err := analysis.AnalyzeArchitecture(context.Background(), graph, rules)
-	if err != nil {
-		fmt.Fprintf(stderr, "crap: %v\n", err)
-		return 1
-	}
-
 	if err := clioutput.Write(stdout, options.output, func(writer io.Writer) error {
 		if options.format == "json" {
 			encoder := json.NewEncoder(writer)
@@ -92,6 +61,42 @@ func runArchitecture(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	return 0
+}
+
+func analyzeArchitecture(options archCLIOptions, stderr io.Writer) (analysis.ArchitectureReport, bool) {
+	root, err := os.Getwd()
+	if err != nil {
+		fmt.Fprintf(stderr, "crap: determine working directory: %v\n", err)
+		return analysis.ArchitectureReport{}, false
+	}
+	analyzer, err := analysis.NewAnalyzer()
+	if err != nil {
+		fmt.Fprintf(stderr, "crap: %v\n", err)
+		return analysis.ArchitectureReport{}, false
+	}
+	defer analyzer.Close()
+	graph, err := analyzer.AnalyzeCodeGraph(analysis.CodeGraphOptions{
+		Root: root, Paths: options.paths, CoveragePath: options.coverage, CRAPThreshold: options.threshold,
+		IncludeTests: options.includeTests, IncludeGenerated: options.includeGenerated, Exclude: options.excludes, StrictCoverage: options.strictCoverage,
+	})
+	if err != nil {
+		fmt.Fprintf(stderr, "crap: %v\n", err)
+		return analysis.ArchitectureReport{}, false
+	}
+	rules := analysis.ArchitectureRules{}
+	if options.rulesFile != "" {
+		parsed, ok := parseArchitectureRules(options.rulesFile, stderr)
+		if !ok {
+			return analysis.ArchitectureReport{}, false
+		}
+		rules = parsed
+	}
+	report, err := analysis.AnalyzeArchitecture(context.Background(), graph, rules)
+	if err != nil {
+		fmt.Fprintf(stderr, "crap: %v\n", err)
+		return analysis.ArchitectureReport{}, false
+	}
+	return report, true
 }
 
 func parseArchitectureOptions(args []string, help, stderr io.Writer) (archCLIOptions, bool) {

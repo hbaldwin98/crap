@@ -461,7 +461,6 @@ func (analyzer *Analyzer) analyzeFile(ctx context.Context, parser *treesitter.Pa
 		return fileAnalysis{err: err}
 	}
 	callables := declarations.callables
-	results := make([]MethodResult, 0, len(callables))
 	structure := fileStructure{language: language.name, types: make([]structuralType, 0, len(declarations.types)), callables: make([]structuralCallable, 0, len(callables)), modules: make([]structuralModule, 0), references: make([]structuralReference, 0)}
 	if language.moduleSyntax != nil {
 		moduleSyntax, err := language.moduleSyntax(ctx, tree.RootNode(), source, relative)
@@ -471,21 +470,42 @@ func (analyzer *Analyzer) analyzeFile(ctx context.Context, parser *treesitter.Pa
 		structure.modules = moduleSyntax.modules
 		structure.references = moduleSyntax.references
 	}
+	typeOccurrences := structuralTypesForFile(ctx, declarations.types, source, language, relative)
+	if typeOccurrences.err != nil {
+		return fileAnalysis{err: typeOccurrences.err}
+	}
+	structure.types = typeOccurrences.types
+	callableResults := callableResultsForFile(ctx, callables, source, path, relative, language, match, changes, options)
+	if callableResults.err != nil {
+		return fileAnalysis{err: callableResults.err}
+	}
+	results := callableResults.methods
+	structure.callables = callableResults.callables
+	return fileAnalysis{methods: results, structure: structure, diagnostic: coverageDiagnostic(relative, match)}
+}
+
+type fileTypesResult struct {
+	types []structuralType
+	err   error
+}
+
+func structuralTypesForFile(ctx context.Context, declarations []typeNode, source []byte, language languageDefinition, relative string) fileTypesResult {
 	typeOccurrences := make(map[string]int)
-	for _, declaration := range declarations.types {
+	types := make([]structuralType, 0, len(declarations))
+	for _, declaration := range declarations {
 		identity, err := callableStructuralIdentityContext(ctx, declaration.node, source, language.typeBody(declaration.node))
 		if err != nil {
-			return fileAnalysis{err: err}
+			return fileTypesResult{err: err}
 		}
 		ownerStructure, err := callableOwnerIdentityContext(ctx, declaration.node, source, language)
 		if err != nil {
-			return fileAnalysis{err: err}
+			return fileTypesResult{err: err}
 		}
 		name := language.qualifiedType(declaration.node, source)
 		key := declaration.kind + "\x00" + identity + "\x00" + ownerStructure
 		occurrence := typeOccurrences[key]
 		typeOccurrences[key]++
-		structure.types = append(structure.types, structuralType{
+		types = append(types, structuralType{
 			ID:   reportcontract.Fingerprint("code-graph-type-v1", language.name, relative, declaration.kind, ownerStructure, identity, strconv.Itoa(occurrence)),
 			Name: name, Kind: declaration.kind,
 			StartLine: int(declaration.node.StartPosition().Row) + 1, StartColumn: int(declaration.node.StartPosition().Column) + 1,
@@ -493,15 +513,27 @@ func (analyzer *Analyzer) analyzeFile(ctx context.Context, parser *treesitter.Pa
 			ParentKind: declaration.parentKind, ParentIndex: declaration.parentIndex,
 		})
 	}
+	return fileTypesResult{types: types}
+}
+
+type fileCallablesResult struct {
+	methods   []MethodResult
+	callables []structuralCallable
+	err       error
+}
+
+func callableResultsForFile(ctx context.Context, callables []callableNode, source []byte, path, relative string, language languageDefinition, match coverageMatch, changes changedFiles, options Options) fileCallablesResult {
 	occurrences := make(map[string]int)
+	methods := make([]MethodResult, 0, len(callables))
+	callablesOut := make([]structuralCallable, 0, len(callables))
 	for index, callable := range callables {
 		if err := ctx.Err(); err != nil {
-			return fileAnalysis{err: err}
+			return fileCallablesResult{err: err}
 		}
 		signature := lexicalSignature(callable.node, source, language)
 		identity, err := callableIdentityContext(ctx, callable.node, source, language)
 		if err != nil {
-			return fileAnalysis{err: err}
+			return fileCallablesResult{err: err}
 		}
 		owner := language.qualifiedName(callable.node, source)
 		ownerIdentity := owner
@@ -510,7 +542,7 @@ func (analyzer *Analyzer) analyzeFile(ctx context.Context, parser *treesitter.Pa
 		}
 		ownerStructure, err := callableOwnerIdentityContext(ctx, callable.node, source, language)
 		if err != nil {
-			return fileAnalysis{err: err}
+			return fileCallablesResult{err: err}
 		}
 		stableOwner := ownerIdentity + "\x00" + ownerStructure
 		occurrenceKey := callable.kind + "\x00" + identity + "\x00" + stableOwner
@@ -518,18 +550,18 @@ func (analyzer *Analyzer) analyzeFile(ctx context.Context, parser *treesitter.Pa
 		occurrences[occurrenceKey]++
 		owned, err := callableOwnedRangesContext(ctx, callables, index)
 		if err != nil {
-			return fileAnalysis{err: err}
+			return fileCallablesResult{err: err}
 		}
 		result, err := resultForNodeContext(ctx, callable.node, source, path, relative, callable.kind, owner, signature, identity, stableOwner, occurrence, match.spans, owned, changes, options.CRAPThreshold, language)
 		if err != nil {
-			return fileAnalysis{err: err}
+			return fileCallablesResult{err: err}
 		}
 		if options.DiffBase == "" || result.Changed {
-			results = append(results, result)
-			structure.callables = append(structure.callables, structuralCallable{ID: result.ID, ParentKind: callable.parentKind, ParentIndex: callable.parentIndex})
+			methods = append(methods, result)
+			callablesOut = append(callablesOut, structuralCallable{ID: result.ID, ParentKind: callable.parentKind, ParentIndex: callable.parentIndex})
 		}
 	}
-	return fileAnalysis{methods: results, structure: structure, diagnostic: coverageDiagnostic(relative, match)}
+	return fileCallablesResult{methods: methods, callables: callablesOut}
 }
 
 func coverageDiagnostic(file string, match coverageMatch) *Diagnostic {

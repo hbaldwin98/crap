@@ -57,6 +57,22 @@ func validate(options *Options) error {
 	if err := validateRoot(options); err != nil {
 		return err
 	}
+	if err := validateMutationBasics(options); err != nil {
+		return err
+	}
+	if err := validateResourceLimits(options); err != nil {
+		return err
+	}
+	if err := validateMutationPaths(options); err != nil {
+		return err
+	}
+	if options.Incremental && options.Language != "typescript" {
+		return fmt.Errorf("incremental mode is only supported for TypeScript")
+	}
+	return nil
+}
+
+func validateMutationBasics(options *Options) error {
 	options.Language = strings.ToLower(options.Language)
 	if options.Language != "csharp" && options.Language != "go" && options.Language != "typescript" {
 		return fmt.Errorf("unsupported language %q", options.Language)
@@ -69,15 +85,6 @@ func validate(options *Options) error {
 	}
 	if options.TimeoutSeconds < 1 {
 		return fmt.Errorf("timeout must be positive")
-	}
-	if err := validateResourceLimits(options); err != nil {
-		return err
-	}
-	if err := validateMutationPaths(options); err != nil {
-		return err
-	}
-	if options.Incremental && options.Language != "typescript" {
-		return fmt.Errorf("incremental mode is only supported for TypeScript")
 	}
 	return nil
 }
@@ -221,27 +228,43 @@ func packagePath(root, path string, authorization *rootauth.Root) (string, error
 }
 
 func authorizeMutationPattern(authorization *rootauth.Root, pattern string) error {
-	trimmed := strings.TrimPrefix(pattern, "!")
-	if trimmed == "" || filepath.IsAbs(trimmed) || filepath.VolumeName(trimmed) != "" {
-		return fmt.Errorf("mutation path must be a relative pattern within root: %s", pattern)
-	}
-	normalized := strings.ReplaceAll(trimmed, "\\", "/")
-	if strings.ContainsAny(normalized, "{}") {
-		return fmt.Errorf("brace expansion is not allowed in authorized mutation paths: %s", pattern)
-	}
-	for _, component := range strings.Split(normalized, "/") {
-		if component == ".." {
-			return fmt.Errorf("mutation path must not escape root: %s", pattern)
-		}
+	normalized, err := normalizeMutationPattern(pattern)
+	if err != nil {
+		return err
 	}
 	meta := strings.IndexAny(normalized, "*?[{")
 	if meta < 0 {
-		if _, err := authorization.Existing(filepath.FromSlash(normalized)); err != nil {
-			return fmt.Errorf("authorize mutation path %q: %w", pattern, err)
-		}
-		return nil
+		return authorizeExistingMutationPath(authorization, pattern, normalized)
 	}
-	prefix := normalized[:meta]
+	return authorizeMutationGlobPrefix(authorization, pattern, normalized[:meta])
+}
+
+func normalizeMutationPattern(pattern string) (string, error) {
+	trimmed := strings.TrimPrefix(pattern, "!")
+	if trimmed == "" || filepath.IsAbs(trimmed) || filepath.VolumeName(trimmed) != "" {
+		return "", fmt.Errorf("mutation path must be a relative pattern within root: %s", pattern)
+	}
+	normalized := strings.ReplaceAll(trimmed, "\\", "/")
+	if strings.ContainsAny(normalized, "{}") {
+		return "", fmt.Errorf("brace expansion is not allowed in authorized mutation paths: %s", pattern)
+	}
+	for _, component := range strings.Split(normalized, "/") {
+		if component == ".." {
+			return "", fmt.Errorf("mutation path must not escape root: %s", pattern)
+		}
+	}
+	return normalized, nil
+}
+
+func authorizeExistingMutationPath(authorization *rootauth.Root, pattern, normalized string) error {
+	if _, err := authorization.Existing(filepath.FromSlash(normalized)); err != nil {
+		return fmt.Errorf("authorize mutation path %q: %w", pattern, err)
+	}
+	return nil
+}
+
+func authorizeMutationGlobPrefix(authorization *rootauth.Root, pattern, globPrefix string) error {
+	prefix := globPrefix
 	prefixEndedAtSeparator := strings.HasSuffix(prefix, "/")
 	prefix = strings.TrimSuffix(prefix, "/")
 	if prefix == "" {
@@ -324,14 +347,8 @@ func (service *Service) runStrykerJS(ctx context.Context, options Options, outpu
 		return Report{}, err
 	}
 	result, runErr := service.runner.Run(ctx, options.Root, name, args, output)
-	if ctx.Err() != nil {
-		return Report{}, commandError(ctx, runErr)
-	}
-	if runErr != nil {
-		return Report{}, commandError(ctx, runErr)
-	}
-	if result.ExitCode != 0 && result.ExitCode != 1 {
-		return Report{}, nativeCommandError(npxCommand(), result)
+	if err := strykerJSRunError(ctx, runErr, result); err != nil {
+		return Report{}, err
 	}
 	if options.Authorization != nil {
 		reportPath, err = options.Authorization.Existing(reportPath)
@@ -339,16 +356,9 @@ func (service *Service) runStrykerJS(ctx context.Context, options Options, outpu
 			return Report{}, fmt.Errorf("authorize generated StrykerJS report: %w", err)
 		}
 	}
-	current, stateErr := reportState(reportPath)
-	if stateErr != nil {
-		return Report{}, stateErr
-	}
-	if !current.exists || current == previous {
-		return Report{}, fmt.Errorf("StrykerJS did not update JSON report %s", reportPath)
-	}
-	data, err := os.ReadFile(reportPath)
+	data, err := readUpdatedStrykerJSReport(reportPath, previous)
 	if err != nil {
-		return Report{}, fmt.Errorf("read StrykerJS report %s: %w", reportPath, err)
+		return Report{}, err
 	}
 	report, err := parseStryker(data, "typescript", "stryker-js", options.MinimumScore)
 	if err != nil {
@@ -359,6 +369,34 @@ func (service *Service) runStrykerJS(ctx context.Context, options Options, outpu
 	}
 	report.Provenance.NativeExitCode = result.ExitCode
 	return report, nil
+}
+
+func strykerJSRunError(ctx context.Context, runErr error, result commandResult) error {
+	if ctx.Err() != nil {
+		return commandError(ctx, runErr)
+	}
+	if runErr != nil {
+		return commandError(ctx, runErr)
+	}
+	if result.ExitCode != 0 && result.ExitCode != 1 {
+		return nativeCommandError(npxCommand(), result)
+	}
+	return nil
+}
+
+func readUpdatedStrykerJSReport(reportPath string, previous fileState) ([]byte, error) {
+	current, stateErr := reportState(reportPath)
+	if stateErr != nil {
+		return nil, stateErr
+	}
+	if !current.exists || current == previous {
+		return nil, fmt.Errorf("StrykerJS did not update JSON report %s", reportPath)
+	}
+	data, err := os.ReadFile(reportPath)
+	if err != nil {
+		return nil, fmt.Errorf("read StrykerJS report %s: %w", reportPath, err)
+	}
+	return data, nil
 }
 
 type fileState struct {

@@ -70,20 +70,10 @@ func main() {
 }
 
 func run(args []string, stdout, stderr io.Writer) int {
-	if len(args) > 0 && args[0] == "mcp" {
-		return runMCP(args[1:], stdout, stderr)
-	}
-	if len(args) > 0 && args[0] == "scope" {
-		return runScope(args[1:], stdout, stderr)
-	}
-	if len(args) > 0 && args[0] == "compare" {
-		return runComparison(args[1:], stdout, stderr)
-	}
-	if len(args) > 0 && args[0] == "graph" {
-		return runGraph(args[1:], stdout, stderr)
-	}
-	if len(args) > 0 && args[0] == "arch" {
-		return runArchitecture(args[1:], stdout, stderr)
+	if len(args) > 0 {
+		if handler, ok := subcommands[args[0]]; ok {
+			return handler(args[1:], stdout, stderr)
+		}
 	}
 	options, ok := parseOptionsWithHelp(args, stdout, stderr)
 	if !ok {
@@ -97,6 +87,14 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 0
 	}
 	return runAnalysis(options, stdout, stderr)
+}
+
+var subcommands = map[string]func([]string, io.Writer, io.Writer) int{
+	"mcp":     runMCP,
+	"scope":   runScope,
+	"compare": runComparison,
+	"graph":   runGraph,
+	"arch":    runArchitecture,
 }
 
 func runGraph(args []string, stdout, stderr io.Writer) int {

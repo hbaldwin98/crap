@@ -108,6 +108,12 @@ func csharpCallableBody(node *treesitter.Node) *treesitter.Node {
 }
 
 func csharpQualifiedName(node *treesitter.Node, source []byte) string {
+	parts := csharpQualifiedNameParts(node, source)
+	parts = append(parts, csharpCallableName(node, source))
+	return strings.Join(parts, ".")
+}
+
+func csharpQualifiedNameParts(node *treesitter.Node, source []byte) []string {
 	parts := make([]string, 0)
 	root := node
 	for parent := node.Parent(); parent != nil; parent = parent.Parent() {
@@ -130,7 +136,10 @@ func csharpQualifiedName(node *treesitter.Node, source []byte) string {
 		}
 	}
 	reverseStrings(parts)
+	return parts
+}
 
+func csharpCallableName(node *treesitter.Node, source []byte) string {
 	callableName := csharpMemberName(node, source)
 	if node.Kind() == "lambda_expression" || node.Kind() == "anonymous_method_expression" {
 		if assigned := csharpAssignedName(node); assigned != nil {
@@ -151,8 +160,7 @@ func csharpQualifiedName(node *treesitter.Node, source []byte) string {
 			}
 		}
 	}
-	parts = append(parts, callableName)
-	return strings.Join(parts, ".")
+	return callableName
 }
 
 func csharpMemberName(node *treesitter.Node, source []byte) string {

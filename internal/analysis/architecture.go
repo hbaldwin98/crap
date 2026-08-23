@@ -92,6 +92,38 @@ func AnalyzeArchitecture(ctx context.Context, graph CodeGraphReport, rules Archi
 	report.Summary.Modules = len(graphModel.ids)
 	report.Summary.Edges = len(graphModel.dependencyEdges)
 
+	report.Cycles = detectArchitectureCycles(graphModel)
+	if rules.shouldForbidCycles() {
+		for _, cycle := range report.Cycles {
+			first := cycle.Edges[0]
+			report.Violations = append(report.Violations, ArchitectureViolation{
+				Kind:   "cycle",
+				From:   first.From,
+				To:     first.To,
+				Reason: "import cycle",
+				Edges:  append([]ArchitectureEdgeReference(nil), cycle.Edges...),
+			})
+		}
+	}
+	appendForbidViolations(&report, graphModel, rules)
+	sort.Slice(report.Violations, func(i, j int) bool {
+		left, right := report.Violations[i], report.Violations[j]
+		if left.From != right.From {
+			return left.From < right.From
+		}
+		if left.To != right.To {
+			return left.To < right.To
+		}
+		return left.Kind < right.Kind
+	})
+
+	report.Summary.Cycles = len(report.Cycles)
+	report.Summary.Violations = len(report.Violations)
+	report.Summary.Complete = len(report.Violations) == 0
+	return report, ctx.Err()
+}
+
+func detectArchitectureCycles(graphModel *architectureGraph) []ArchitectureCycle {
 	components := graphModel.components()
 	cycles := make([]ArchitectureCycle, 0, len(components))
 	for _, component := range components {
@@ -105,21 +137,10 @@ func AnalyzeArchitecture(ctx context.Context, graph CodeGraphReport, rules Archi
 		return cycles[i].Edges[0].From+"/"+cycles[i].Edges[0].To <
 			cycles[j].Edges[0].From+"/"+cycles[j].Edges[0].To
 	})
-	report.Cycles = cycles
+	return cycles
+}
 
-	if rules.shouldForbidCycles() {
-		for _, cycle := range cycles {
-			first := cycle.Edges[0]
-			report.Violations = append(report.Violations, ArchitectureViolation{
-				Kind:   "cycle",
-				From:   first.From,
-				To:     first.To,
-				Reason: "import cycle",
-				Edges:  append([]ArchitectureEdgeReference(nil), cycle.Edges...),
-			})
-		}
-	}
-
+func appendForbidViolations(report *ArchitectureReport, graphModel *architectureGraph, rules ArchitectureRules) {
 	for _, edge := range graphModel.dependencyEdges {
 		fromName := graphModel.name(edge.From)
 		toName := graphModel.name(edge.To)
@@ -145,21 +166,6 @@ func AnalyzeArchitecture(ctx context.Context, graph CodeGraphReport, rules Archi
 			})
 		}
 	}
-	sort.Slice(report.Violations, func(i, j int) bool {
-		left, right := report.Violations[i], report.Violations[j]
-		if left.From != right.From {
-			return left.From < right.From
-		}
-		if left.To != right.To {
-			return left.To < right.To
-		}
-		return left.Kind < right.Kind
-	})
-
-	report.Summary.Cycles = len(report.Cycles)
-	report.Summary.Violations = len(report.Violations)
-	report.Summary.Complete = len(report.Violations) == 0
-	return report, ctx.Err()
 }
 
 func (rules ArchitectureRules) shouldForbidCycles() bool {
@@ -319,6 +325,94 @@ func (g *architectureGraph) hasSelfLoop(moduleID string) bool {
 	return false
 }
 
+func (g *architectureGraph) findNextStartWithEdges(component []string, adjacency map[string][]string) string {
+	for _, id := range component {
+		if len(adjacency[id]) > 0 {
+			return id
+		}
+	}
+	return ""
+}
+
+func (g *architectureGraph) dfsFindBackEdge(component []string, adjacency map[string][]string, start string) (string, string, map[string]string, bool) {
+	const (
+		white = 0
+		gray  = 1
+		black = 2
+	)
+	color := make(map[string]int, len(component))
+	parent := make(map[string]string)
+	found := false
+	var backFrom, backTo string
+
+	var visit func(string)
+	visit = func(node string) {
+		if found {
+			return
+		}
+		color[node] = gray
+		for _, neighbor := range adjacency[node] {
+			if found {
+				return
+			}
+			switch color[neighbor] {
+			case gray:
+				backFrom, backTo = node, neighbor
+				found = true
+				return
+			case white:
+				parent[neighbor] = node
+				visit(neighbor)
+				if !found {
+					color[neighbor] = black
+				}
+			}
+		}
+		if !found {
+			color[node] = black
+		}
+	}
+	for _, id := range component {
+		if color[id] == white && !found {
+			visit(id)
+		}
+	}
+	if !found {
+		return "", "", nil, false
+	}
+	return backFrom, backTo, parent, true
+}
+
+func (g *architectureGraph) reconstructPath(backFrom, backTo string, parent map[string]string) []string {
+	path := []string{backFrom}
+	for path[len(path)-1] != backTo {
+		next, ok := parent[path[len(path)-1]]
+		if !ok || next == "" || next == path[len(path)-1] {
+			return nil
+		}
+		path = append(path, next)
+	}
+	return path
+}
+
+func (g *architectureGraph) buildOrderedEdges(path []string, backFrom, backTo string) [][2]string {
+	var ordered [][2]string
+	for i := len(path) - 2; i >= 0; i-- {
+		ordered = append(ordered, [2]string{path[i+1], path[i]})
+	}
+	ordered = append(ordered, [2]string{backFrom, backTo})
+	return ordered
+}
+
+func (g *architectureGraph) removeEdge(adjacency map[string][]string, from, to string) {
+	for j := 0; j < len(adjacency[from]); j++ {
+		if adjacency[from][j] == to {
+			adjacency[from] = append(adjacency[from][:j], adjacency[from][j+1:]...)
+			break
+		}
+	}
+}
+
 // witnessComponent builds a cycle witness covering a nontrivial SCC. It repeats
 // a deterministic depth-first search over the component's subgraph to find
 // directed cycles, peeling one simple cycle off at a time until no directed
@@ -340,99 +434,22 @@ func (g *architectureGraph) witnessComponent(component []string) (ArchitectureCy
 	var witness []ArchitectureEdgeReference
 
 	for {
-		start := ""
-		for _, id := range component {
-			if len(adjacency[id]) > 0 {
-				start = id
-				break
-			}
-		}
+		start := g.findNextStartWithEdges(component, adjacency)
 		if start == "" {
 			break
 		}
 
-		// Deterministic DFS discovering a back edge; parent tracks the tree
-		// so we can reconstruct the ancestor chain for the found back edge.
-		const (
-			white = 0
-			gray  = 1
-			black = 2
-		)
-		color := make(map[string]int, len(component))
-		parent := make(map[string]string)
-		found := false
-		var backFrom, backTo string
-
-		var visit func(string)
-		visit = func(node string) {
-			if found {
-				return
-			}
-			color[node] = gray
-			for _, neighbor := range adjacency[node] {
-				if found {
-					return
-				}
-				switch color[neighbor] {
-				case gray:
-					backFrom, backTo = node, neighbor
-					found = true
-					return
-				case white:
-					parent[neighbor] = node
-					visit(neighbor)
-					if !found {
-						color[neighbor] = black
-					}
-				}
-			}
-			if !found {
-				color[node] = black
-			}
-		}
-		for _, id := range component {
-			if color[id] == white && !found {
-				visit(id)
-			}
-		}
+		backFrom, backTo, parent, found := g.dfsFindBackEdge(component, adjacency, start)
 		if !found {
 			break
 		}
 
-		// Reconstruct the fundamental directed cycle. Tree edges are oriented
-		// parent -> child, so walking parent links from backFrom to backTo and
-		// emitting them in reverse yields real tree edges; the DFS back edge
-		// backFrom -> backTo closes the cycle.
-		path := []string{backFrom}
-		for path[len(path)-1] != backTo {
-			next, ok := parent[path[len(path)-1]]
-			if !ok || next == "" || next == path[len(path)-1] {
-				break
-			}
-			path = append(path, next)
-		}
-		if path[len(path)-1] != backTo {
-			// Path reconstruction failed; drop out rather than loop forever.
+		path := g.reconstructPath(backFrom, backTo, parent)
+		if len(path) == 0 || path[len(path)-1] != backTo {
 			break
 		}
 
-		// path is [backFrom, ..., backTo]; tree edges in order are
-		// (path[i+1], path[i]) walked upward, then closing (backFrom, backTo).
-		removeEdge := func(from, to string) {
-			for j := 0; j < len(adjacency[from]); j++ {
-				if adjacency[from][j] == to {
-					adjacency[from] = append(adjacency[from][:j], adjacency[from][j+1:]...)
-					break
-				}
-			}
-		}
-		// Trailing edge into backTo via the last tree step, plus the back edge.
-		var ordered [][2]string
-		for i := len(path) - 2; i >= 0; i-- {
-			ordered = append(ordered, [2]string{path[i+1], path[i]})
-		}
-		ordered = append(ordered, [2]string{backFrom, backTo})
-
+		ordered := g.buildOrderedEdges(path, backFrom, backTo)
 		before := len(witness)
 		for _, pair := range ordered {
 			from, to := pair[0], pair[1]
@@ -445,10 +462,9 @@ func (g *architectureGraph) witnessComponent(component []string) (ArchitectureCy
 				To:         g.name(to),
 				References: append([]string(nil), edge.References...),
 			})
-			removeEdge(from, to)
+			g.removeEdge(adjacency, from, to)
 		}
 		if len(witness) == before {
-			// No edge removed; progress is impossible. Halt deterministically.
 			break
 		}
 	}

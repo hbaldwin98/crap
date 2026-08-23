@@ -54,13 +54,9 @@ func (analyzer *Analyzer) readGitSourceSnapshot(ctx context.Context, root, repos
 	if err != nil {
 		return gitSourceSnapshot{}, err
 	}
-	repositoryPrefix, err := filepath.Rel(repositoryRoot, root)
-	if err != nil || repositoryPrefix == ".." || strings.HasPrefix(repositoryPrefix, ".."+string(filepath.Separator)) {
-		return gitSourceSnapshot{}, fmt.Errorf("analysis root is outside Git repository")
-	}
-	prefix := normalizePath(repositoryPrefix)
-	if prefix == "." {
-		prefix = ""
+	prefix, err := baselineRepositoryPrefix(root, repositoryRoot)
+	if err != nil {
+		return gitSourceSnapshot{}, err
 	}
 	entryByPath := make(map[string]gitTreeEntry, len(entries))
 	for _, entry := range entries {
@@ -71,10 +67,31 @@ func (analyzer *Analyzer) readGitSourceSnapshot(ctx context.Context, root, repos
 		return gitSourceSnapshot{}, err
 	}
 	result := gitSourceSnapshot{files: make([]gitSourceFile, 0), discovery: discoveryResult{files: make([]string, 0), exclusions: make(map[string]int), examples: make(map[string][]string)}}
+	if err := analyzer.appendBaselineSourceFiles(ctx, repositoryRoot, entries, selector, &result); err != nil {
+		return gitSourceSnapshot{}, err
+	}
+	sort.Slice(result.files, func(i, j int) bool { return result.files[i].path < result.files[j].path })
+	sort.Strings(result.discovery.files)
+	return result, nil
+}
+
+func baselineRepositoryPrefix(root, repositoryRoot string) (string, error) {
+	repositoryPrefix, err := filepath.Rel(repositoryRoot, root)
+	if err != nil || repositoryPrefix == ".." || strings.HasPrefix(repositoryPrefix, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("analysis root is outside Git repository")
+	}
+	prefix := normalizePath(repositoryPrefix)
+	if prefix == "." {
+		prefix = ""
+	}
+	return prefix, nil
+}
+
+func (analyzer *Analyzer) appendBaselineSourceFiles(ctx context.Context, repositoryRoot string, entries []gitTreeEntry, selector baselineSourceSelector, result *gitSourceSnapshot) error {
 	recorder := discoveryRecorder{result: &result.discovery, seen: make(map[string]map[string]bool)}
 	for _, entry := range entries {
 		if err := ctx.Err(); err != nil {
-			return gitSourceSnapshot{}, err
+			return err
 		}
 		relative, reason, selected := selector.classify(entry)
 		if !selected {
@@ -86,14 +103,12 @@ func (analyzer *Analyzer) readGitSourceSnapshot(ctx context.Context, root, repos
 		}
 		data, err := analyzer.git.Output(ctx, repositoryRoot, "cat-file", "blob", entry.oid)
 		if err != nil {
-			return gitSourceSnapshot{}, fmt.Errorf("read baseline source %s: %w", relative, err)
+			return fmt.Errorf("read baseline source %s: %w", relative, err)
 		}
 		result.files = append(result.files, gitSourceFile{path: relative, data: data})
 		result.discovery.files = append(result.discovery.files, relative)
 	}
-	sort.Slice(result.files, func(i, j int) bool { return result.files[i].path < result.files[j].path })
-	sort.Strings(result.discovery.files)
-	return result, nil
+	return nil
 }
 
 func (analyzer *Analyzer) newBaselineSourceSelector(ctx context.Context, root, repositoryRoot, prefix string, entries []gitTreeEntry, entryByPath map[string]gitTreeEntry, options Options) (baselineSourceSelector, error) {

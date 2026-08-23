@@ -59,19 +59,8 @@ func WriteChecked(stdout io.Writer, path string, render func(io.Writer) error, b
 			_ = os.Remove(temporaryPath)
 		}
 	}()
-	if existed {
-		if err := temporary.Chmod(mode); err != nil {
-			return fmt.Errorf("preserve destination permissions: %w", err)
-		}
-	}
-	if err := render(temporary); err != nil {
-		return fmt.Errorf("render temporary file: %w", err)
-	}
-	if err := temporary.Sync(); err != nil {
-		return fmt.Errorf("sync temporary file: %w", err)
-	}
-	if err := temporary.Close(); err != nil {
-		return fmt.Errorf("close temporary file: %w", err)
+	if err := stageTemporaryContents(temporary, mode, existed, render); err != nil {
+		return err
 	}
 	if _, _, err := destinationMode(clean); err != nil {
 		return err
@@ -87,6 +76,24 @@ func WriteChecked(stdout io.Writer, path string, render func(io.Writer) error, b
 	}
 	if err != nil {
 		return fmt.Errorf("replace destination: %w", err)
+	}
+	return nil
+}
+
+func stageTemporaryContents(temporary *os.File, mode os.FileMode, existed bool, render func(io.Writer) error) error {
+	if existed {
+		if err := temporary.Chmod(mode); err != nil {
+			return fmt.Errorf("preserve destination permissions: %w", err)
+		}
+	}
+	if err := render(temporary); err != nil {
+		return fmt.Errorf("render temporary file: %w", err)
+	}
+	if err := temporary.Sync(); err != nil {
+		return fmt.Errorf("sync temporary file: %w", err)
+	}
+	if err := temporary.Close(); err != nil {
+		return fmt.Errorf("close temporary file: %w", err)
 	}
 	return nil
 }

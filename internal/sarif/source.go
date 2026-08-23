@@ -17,41 +17,69 @@ type Source struct {
 }
 
 func ReadSource(root, displayedPath string) (*Source, error) {
+	canonicalRoot, err := resolveSourceRoot(root)
+	if err != nil {
+		return nil, err
+	}
+	normalized, err := normalizeSourcePath(displayedPath)
+	if err != nil {
+		return nil, err
+	}
+	candidate, err := resolveSourceFile(canonicalRoot, normalized, displayedPath)
+	if err != nil {
+		return nil, err
+	}
+	return readSourceLines(candidate, displayedPath, normalized)
+}
+
+func resolveSourceRoot(root string) (string, error) {
 	canonicalRoot, err := filepath.Abs(root)
 	if err != nil {
-		return nil, fmt.Errorf("resolve root: %w", err)
+		return "", fmt.Errorf("resolve root: %w", err)
 	}
 	canonicalRoot, err = filepath.EvalSymlinks(canonicalRoot)
 	if err != nil {
-		return nil, fmt.Errorf("resolve root links: %w", err)
+		return "", fmt.Errorf("resolve root links: %w", err)
 	}
+	return canonicalRoot, nil
+}
+
+func normalizeSourcePath(displayedPath string) (string, error) {
 	normalized := path.Clean(strings.ReplaceAll(displayedPath, "\\", "/"))
 	if normalized == "" || normalized == "." || path.IsAbs(normalized) || normalized == ".." || strings.HasPrefix(normalized, "../") || filepath.VolumeName(filepath.FromSlash(normalized)) != "" {
-		return nil, fmt.Errorf("source path must be root-relative: %q", displayedPath)
+		return "", fmt.Errorf("source path must be root-relative: %q", displayedPath)
 	}
+	return normalized, nil
+}
+
+func resolveSourceFile(canonicalRoot, normalized, displayedPath string) (string, error) {
 	candidate := filepath.Join(canonicalRoot, filepath.FromSlash(normalized))
 	relative, err := filepath.Rel(canonicalRoot, candidate)
 	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
-		return nil, fmt.Errorf("source path is outside root: %q", displayedPath)
+		return "", fmt.Errorf("source path is outside root: %q", displayedPath)
 	}
 	current := canonicalRoot
 	for _, component := range strings.Split(relative, string(filepath.Separator)) {
 		current = filepath.Join(current, component)
 		info, err := os.Lstat(current)
 		if err != nil {
-			return nil, fmt.Errorf("inspect source %q: %w", displayedPath, err)
+			return "", fmt.Errorf("inspect source %q: %w", displayedPath, err)
 		}
 		if info.Mode()&os.ModeSymlink != 0 {
-			return nil, fmt.Errorf("source path contains a symlink: %q", displayedPath)
+			return "", fmt.Errorf("source path contains a symlink: %q", displayedPath)
 		}
 	}
 	info, err := os.Stat(candidate)
 	if err != nil {
-		return nil, fmt.Errorf("inspect source %q: %w", displayedPath, err)
+		return "", fmt.Errorf("inspect source %q: %w", displayedPath, err)
 	}
 	if !info.Mode().IsRegular() {
-		return nil, fmt.Errorf("source is not a regular file: %q", displayedPath)
+		return "", fmt.Errorf("source is not a regular file: %q", displayedPath)
 	}
+	return candidate, nil
+}
+
+func readSourceLines(candidate, displayedPath, normalized string) (*Source, error) {
 	data, err := os.ReadFile(candidate)
 	if err != nil {
 		return nil, fmt.Errorf("read source %q: %w", displayedPath, err)

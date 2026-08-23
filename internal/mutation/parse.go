@@ -96,6 +96,13 @@ func validateStrykerReport(raw strykerReport, engine string) error {
 	if !supportedStrykerSchema(engine, raw.SchemaVersion) {
 		return fmt.Errorf("parse %s JSON report: unsupported schemaVersion %q", engine, raw.SchemaVersion)
 	}
+	if err := validateStrykerThresholds(raw, engine); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateStrykerThresholds(raw strykerReport, engine string) error {
 	if raw.Thresholds == nil || raw.Thresholds.High == nil || raw.Thresholds.Low == nil {
 		return fmt.Errorf("parse %s JSON report: missing thresholds", engine)
 	}
@@ -153,13 +160,9 @@ func parseStrykerMutant(mutant strykerMutant, file, engine string, nativeIDs, wr
 	if !ok {
 		return MutantResult{}, fmt.Errorf("parse %s JSON report: mutant %s has unsupported status %q", engine, mutant.ID, mutant.Status)
 	}
-	if mutant.Location == nil || !completeStrykerPosition(mutant.Location.Start) || !completeStrykerPosition(mutant.Location.End) {
-		return MutantResult{}, fmt.Errorf("parse %s JSON report: mutant %s has incomplete location", engine, mutant.ID)
-	}
-	line, column := *mutant.Location.Start.Line, *mutant.Location.Start.Column
-	endLine, endColumn := *mutant.Location.End.Line, *mutant.Location.End.Column
-	if line < 1 || column < 1 || endColumn < 1 || endLine < line || (endLine == line && endColumn < column) {
-		return MutantResult{}, fmt.Errorf("parse %s JSON report: mutant %s has invalid location", engine, mutant.ID)
+	line, column, endLine, endColumn, err := strykerMutantLocation(mutant, engine, file)
+	if err != nil {
+		return MutantResult{}, err
 	}
 	reason := mutant.StatusReason
 	if reason == "" {
@@ -173,6 +176,18 @@ func parseStrykerMutant(mutant strykerMutant, file, engine string, nativeIDs, wr
 	nativeID := mutant.ID
 	return MutantResult{ID: id, NativeID: &nativeID, File: file, Line: line, Column: column, StartLine: line, StartColumn: column,
 		EndLine: &endLine, EndColumn: &endColumn, Mutator: mutant.MutatorName, Status: status, Replacement: mutant.Replacement, Reason: reason}, nil
+}
+
+func strykerMutantLocation(mutant strykerMutant, engine, file string) (line, column, endLine, endColumn int, err error) {
+	if mutant.Location == nil || !completeStrykerPosition(mutant.Location.Start) || !completeStrykerPosition(mutant.Location.End) {
+		return 0, 0, 0, 0, fmt.Errorf("parse %s JSON report: mutant %s has incomplete location", engine, mutant.ID)
+	}
+	line, column = *mutant.Location.Start.Line, *mutant.Location.Start.Column
+	endLine, endColumn = *mutant.Location.End.Line, *mutant.Location.End.Column
+	if line < 1 || column < 1 || endColumn < 1 || endLine < line || (endLine == line && endColumn < column) {
+		return 0, 0, 0, 0, fmt.Errorf("parse %s JSON report: mutant %s has invalid location", engine, mutant.ID)
+	}
+	return line, column, endLine, endColumn, nil
 }
 
 type strykerPosition struct {

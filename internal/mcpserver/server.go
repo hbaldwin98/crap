@@ -392,20 +392,11 @@ func analyzeWith(ctx context.Context, _ *mcp.CallToolRequest, input AnalyzeInput
 }
 
 func getAnalysisResults(ctx context.Context, snapshots *snapshotStore, input GetResultsInput) (AnalyzeOutput, error) {
-	mode, reportID, offset, limit := input.ResultMode, input.ReportID, 0, input.Limit
-	if input.Cursor != "" {
-		if input.ReportID != "" || input.ResultMode != "" || input.Limit != nil {
-			return AnalyzeOutput{}, fmt.Errorf("cursor cannot be combined with reportId, resultMode, or limit")
-		}
-		cursor, err := snapshots.decodeCursor(input.Cursor)
-		if err != nil {
-			return AnalyzeOutput{}, err
-		}
-		mode, reportID, offset, limit = cursor.ResultMode, cursor.ReportID, cursor.Offset, &cursor.Limit
-	} else if reportID == "" {
-		return AnalyzeOutput{}, fmt.Errorf("reportId or cursor is required")
+	mode, reportID, offset, limit, err := resolveResultsQuery(snapshots, input)
+	if err != nil {
+		return AnalyzeOutput{}, err
 	}
-	mode, err := resultMode(mode)
+	mode, err = resultMode(mode)
 	if err != nil {
 		return AnalyzeOutput{}, err
 	}
@@ -439,6 +430,23 @@ func getAnalysisResults(ctx context.Context, snapshots *snapshotStore, input Get
 		return AnalyzeOutput{}, err
 	}
 	return decoratePage(snapshots, output, item, mode, resolvedLimit, offset), nil
+}
+
+func resolveResultsQuery(snapshots *snapshotStore, input GetResultsInput) (string, string, int, *int, error) {
+	if input.Cursor == "" {
+		if input.ReportID == "" {
+			return "", "", 0, nil, fmt.Errorf("reportId or cursor is required")
+		}
+		return input.ResultMode, input.ReportID, 0, input.Limit, nil
+	}
+	if input.ReportID != "" || input.ResultMode != "" || input.Limit != nil {
+		return "", "", 0, nil, fmt.Errorf("cursor cannot be combined with reportId, resultMode, or limit")
+	}
+	cursor, err := snapshots.decodeCursor(input.Cursor)
+	if err != nil {
+		return "", "", 0, nil, err
+	}
+	return cursor.ResultMode, cursor.ReportID, cursor.Offset, &cursor.Limit, nil
 }
 
 func decoratePage(snapshots *snapshotStore, output AnalyzeOutput, item *snapshot, mode string, limit, offset int) AnalyzeOutput {

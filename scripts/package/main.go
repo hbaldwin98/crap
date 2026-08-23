@@ -139,6 +139,26 @@ func stageLicenses(work string, packages []string) ([]string, error) {
 	}
 	names := []string{"LICENSE"}
 
+	modules, err := listDependencyModules(packages)
+	if err != nil {
+		return nil, err
+	}
+	modulePaths := make([]string, 0, len(modules))
+	for modulePath := range modules {
+		modulePaths = append(modulePaths, modulePath)
+	}
+	sort.Strings(modulePaths)
+	for _, modulePath := range modulePaths {
+		staged, err := stageDependencyLicense(work, modulePath, modules[modulePath])
+		if err != nil {
+			return nil, err
+		}
+		names = append(names, staged...)
+	}
+	return names, nil
+}
+
+func listDependencyModules(packages []string) (map[string]listedModule, error) {
 	command := exec.Command("go", append([]string{"list", "-deps", "-json"}, packages...)...)
 	output, err := command.StdoutPipe()
 	if err != nil {
@@ -167,32 +187,28 @@ func stageLicenses(work string, packages []string) ([]string, error) {
 	if err := command.Wait(); err != nil {
 		return nil, fmt.Errorf("list dependency licenses: %w", err)
 	}
+	return modules, nil
+}
 
-	modulePaths := make([]string, 0, len(modules))
-	for modulePath := range modules {
-		modulePaths = append(modulePaths, modulePath)
+func stageDependencyLicense(work, modulePath string, module listedModule) ([]string, error) {
+	source := module
+	if module.Replace != nil {
+		source = *module.Replace
 	}
-	sort.Strings(modulePaths)
-	for _, modulePath := range modulePaths {
-		module := modules[modulePath]
-		source := module
-		if module.Replace != nil {
-			source = *module.Replace
+	legalFiles, err := moduleLegalFiles(source.Dir)
+	if err != nil {
+		return nil, fmt.Errorf("find licenses for %s: %w", modulePath, err)
+	}
+	if len(legalFiles) == 0 {
+		return nil, fmt.Errorf("dependency %s has no root license or notice file", modulePath)
+	}
+	names := make([]string, 0, len(legalFiles))
+	for _, sourcePath := range legalFiles {
+		name := filepath.ToSlash(filepath.Join("licenses", modulePath, filepath.Base(sourcePath)))
+		if err := copyPath(filepath.Join(work, filepath.FromSlash(name)), sourcePath); err != nil {
+			return nil, fmt.Errorf("stage license for %s: %w", modulePath, err)
 		}
-		legalFiles, err := moduleLegalFiles(source.Dir)
-		if err != nil {
-			return nil, fmt.Errorf("find licenses for %s: %w", modulePath, err)
-		}
-		if len(legalFiles) == 0 {
-			return nil, fmt.Errorf("dependency %s has no root license or notice file", modulePath)
-		}
-		for _, sourcePath := range legalFiles {
-			name := filepath.ToSlash(filepath.Join("licenses", modulePath, filepath.Base(sourcePath)))
-			if err := copyPath(filepath.Join(work, filepath.FromSlash(name)), sourcePath); err != nil {
-				return nil, fmt.Errorf("stage license for %s: %w", modulePath, err)
-			}
-			names = append(names, name)
-		}
+		names = append(names, name)
 	}
 	return names, nil
 }

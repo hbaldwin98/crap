@@ -31,17 +31,37 @@ func buildModuleGraph(ctx context.Context, graph *CodeGraphReport, inputs analys
 		}{baseConfig, graph.ResolutionInputs})
 	}
 
+	fileIDs := indexFileIDs(graph)
+	modules, fileModules, err := collectCodeGraphModules(ctx, graph, inputs, goModulePath)
+	if err != nil {
+		return err
+	}
+	appendModuleNodesAndMemberEdges(graph, modules, fileIDs)
+	dependencyReferences, err := collectModuleReferences(ctx, graph, inputs, fileModules, fileIDs, modules)
+	if err != nil {
+		return err
+	}
+	appendModuleImportEdges(graph, dependencyReferences)
+	aggregateCodeGraphModuleMetrics(graph, modules, fileModules)
+	return nil
+}
+
+func indexFileIDs(graph *CodeGraphReport) map[string]string {
 	fileIDs := make(map[string]string)
 	for _, node := range graph.Nodes {
 		if node.Kind == "file" {
 			fileIDs[node.Path] = node.ID
 		}
 	}
+	return fileIDs
+}
+
+func collectCodeGraphModules(ctx context.Context, graph *CodeGraphReport, inputs analysisInputs, goModulePath string) (map[string]*codeGraphModuleBuild, map[string][]string, error) {
 	modules := make(map[string]*codeGraphModuleBuild)
 	fileModules := make(map[string][]string)
 	for _, source := range graph.Fingerprints.Sources {
 		if err := ctx.Err(); err != nil {
-			return err
+			return nil, nil, err
 		}
 		structure := inputs.structures[source.Path]
 		for _, declaration := range structure.modules {
@@ -59,8 +79,11 @@ func buildModuleGraph(ctx context.Context, graph *CodeGraphReport, inputs analys
 			fileModules[source.Path] = appendUniqueString(fileModules[source.Path], id)
 		}
 	}
-	moduleIDs := sortedModuleIDs(modules)
-	for _, id := range moduleIDs {
+	return modules, fileModules, nil
+}
+
+func appendModuleNodesAndMemberEdges(graph *CodeGraphReport, modules map[string]*codeGraphModuleBuild, fileIDs map[string]string) {
+	for _, id := range sortedModuleIDs(modules) {
 		module := modules[id]
 		graph.Nodes = append(graph.Nodes, module.node)
 		files := sortedBoolKeys(module.files)
@@ -68,7 +91,9 @@ func buildModuleGraph(ctx context.Context, graph *CodeGraphReport, inputs analys
 			graph.Edges = append(graph.Edges, newModuleGraphEdge("member-of", fileIDs[path], id, "module-declaration", nil))
 		}
 	}
+}
 
+func collectModuleReferences(ctx context.Context, graph *CodeGraphReport, inputs analysisInputs, fileModules map[string][]string, fileIDs map[string]string, modules map[string]*codeGraphModuleBuild) (map[string][]string, error) {
 	moduleByName := indexModulesByName(modules)
 	occurrences := make(map[string]int)
 	dependencyReferences := make(map[string][]string)
@@ -79,7 +104,7 @@ func buildModuleGraph(ctx context.Context, graph *CodeGraphReport, inputs analys
 		for _, raw := range structure.references {
 			for _, sourceModule := range sourceModules {
 				if err := ctx.Err(); err != nil {
-					return err
+					return nil, err
 				}
 				key := strings.Join([]string{fileIDs[source.Path], sourceModule, raw.Kind, raw.Specifier, raw.Scope, raw.Binding}, "\x00")
 				occurrence := occurrences[key]
@@ -93,6 +118,10 @@ func buildModuleGraph(ctx context.Context, graph *CodeGraphReport, inputs analys
 			}
 		}
 	}
+	return dependencyReferences, nil
+}
+
+func appendModuleImportEdges(graph *CodeGraphReport, dependencyReferences map[string][]string) {
 	dependencyKeys := make([]string, 0, len(dependencyReferences))
 	for key := range dependencyReferences {
 		dependencyKeys = append(dependencyKeys, key)
@@ -104,8 +133,6 @@ func buildModuleGraph(ctx context.Context, graph *CodeGraphReport, inputs analys
 		sort.Strings(references)
 		graph.Edges = append(graph.Edges, newModuleGraphEdge("imports", parts[0], parts[1], "static-import", references))
 	}
-	aggregateCodeGraphModuleMetrics(graph, modules, fileModules)
-	return nil
 }
 
 func loadCodeGraphGoModule(root string) (string, *reportcontract.FileFingerprint, error) {

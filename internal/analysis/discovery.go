@@ -133,6 +133,10 @@ func readIgnoreFileContext(ctx context.Context, path string, domain []string, au
 		return nil, fmt.Errorf("open %s: %w", filepath.Base(path), err)
 	}
 	defer file.Close()
+	return scanIgnorePatterns(ctx, file, path, domain)
+}
+
+func scanIgnorePatterns(ctx context.Context, file *os.File, path string, domain []string) ([]gitignore.Pattern, error) {
 	patterns := make([]gitignore.Pattern, 0)
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {

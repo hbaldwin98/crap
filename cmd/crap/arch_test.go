@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/hbaldwin98/crap/internal/analysis"
 )
 
 func TestRunArchitectureHelpExitsZero(t *testing.T) {
@@ -102,4 +104,38 @@ func writeArchitectureFixture(t *testing.T, source string) string {
 	}
 	t.Cleanup(func() { _ = os.Chdir(previous) })
 	return root
+}
+
+func TestWriteArchitectureText(t *testing.T) {
+	report := analysis.ArchitectureReport{
+		Summary: analysis.ArchitectureSummary{Modules: 3, Edges: 2, Cycles: 1, Violations: 2},
+		Cycles: []analysis.ArchitectureCycle{
+			{Modules: []string{"a", "b"}, Edges: []analysis.ArchitectureEdgeReference{
+				{From: "a", To: "b"},
+				{From: "b", To: "a"},
+			}},
+		},
+		Violations: []analysis.ArchitectureViolation{
+			{Kind: "forbid", From: "a", To: "b", Reason: "layering"},
+			{Kind: "cycle", From: "b", To: "a"},
+			{Kind: "forbid", From: "c", To: "d"},
+		},
+		Limitations: []string{"baseline missing"},
+	}
+	var buf bytes.Buffer
+	writeArchitectureText(&buf, report)
+	got := buf.String()
+	for _, want := range []string{
+		"3 modules, 2 dependencies, 1 cycles, 2 violations\n",
+		"CYCLE a -> b\n",
+		"  b -> a\n",
+		"VIOLATION forbid a -> b (layering)\n",
+		"VIOLATION cycle b -> a (cycle)\n",
+		"VIOLATION forbid c -> d\n",
+		"LIMITATION baseline missing\n",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("output missing %q:\n%s", want, got)
+		}
+	}
 }

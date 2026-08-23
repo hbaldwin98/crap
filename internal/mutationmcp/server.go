@@ -206,11 +206,9 @@ type resultQuery struct {
 }
 
 func normalizeQuery(mode string, statuses []string, requestedLimit *int) (resultQuery, error) {
-	if mode == "" {
-		mode = "actionable"
-	}
-	if mode != "summary" && mode != "actionable" && mode != "all" {
-		return resultQuery{}, fmt.Errorf("resultMode must be summary, actionable, or all")
+	mode, err := normalizeQueryMode(mode)
+	if err != nil {
+		return resultQuery{}, err
 	}
 	limit := 20
 	if requestedLimit != nil {
@@ -219,14 +217,32 @@ func normalizeQuery(mode string, statuses []string, requestedLimit *int) (result
 	if limit < 1 || limit > 100 {
 		return resultQuery{}, fmt.Errorf("limit must be between 1 and 100")
 	}
+	statuses, err = normalizeQueryStatuses(mode, statuses)
+	if err != nil {
+		return resultQuery{}, err
+	}
+	return resultQuery{mode: mode, statuses: statuses, limit: limit}, nil
+}
+
+func normalizeQueryMode(mode string) (string, error) {
+	if mode == "" {
+		mode = "actionable"
+	}
+	if mode != "summary" && mode != "actionable" && mode != "all" {
+		return "", fmt.Errorf("resultMode must be summary, actionable, or all")
+	}
+	return mode, nil
+}
+
+func normalizeQueryStatuses(mode string, statuses []string) ([]string, error) {
 	if mode == "summary" && len(statuses) > 0 {
-		return resultQuery{}, fmt.Errorf("statuses cannot be used with summary resultMode")
+		return nil, fmt.Errorf("statuses cannot be used with summary resultMode")
 	}
 	allowed := map[string]bool{"killed": true, "survived": true, "timedOut": true, "noCoverage": true, "compileError": true, "runtimeError": true, "ignored": true}
 	unique := make(map[string]bool)
 	for _, status := range statuses {
 		if !allowed[status] {
-			return resultQuery{}, fmt.Errorf("unsupported mutation status %q", status)
+			return nil, fmt.Errorf("unsupported mutation status %q", status)
 		}
 		unique[status] = true
 	}
@@ -238,7 +254,7 @@ func normalizeQuery(mode string, statuses []string, requestedLimit *int) (result
 	if len(statuses) == 0 && mode == "actionable" {
 		statuses = []string{"noCoverage", "survived"}
 	}
-	return resultQuery{mode: mode, statuses: statuses, limit: limit}, nil
+	return statuses, nil
 }
 
 func getMutationResults(snapshots *snapshotStore, input GetResultsInput) (MutationOutput, error) {

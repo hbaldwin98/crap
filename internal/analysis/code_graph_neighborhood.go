@@ -88,58 +88,19 @@ func BuildCodeGraphNeighborhoodContext(ctx context.Context, report CodeGraphRepo
 	if err != nil {
 		return CodeGraphNeighborhood{}, err
 	}
-	orderedNodeIDs := make([]string, 0, len(distances))
-	for id := range distances {
-		if err := ctx.Err(); err != nil {
-			return CodeGraphNeighborhood{}, err
-		}
-		orderedNodeIDs = append(orderedNodeIDs, id)
-	}
-	if err := ctx.Err(); err != nil {
-		return CodeGraphNeighborhood{}, err
-	}
-	sort.Slice(orderedNodeIDs, func(i, j int) bool {
-		left, right := distances[orderedNodeIDs[i]], distances[orderedNodeIDs[j]]
-		if left != right {
-			return left < right
-		}
-		return orderedNodeIDs[i] < orderedNodeIDs[j]
-	})
-	if err := ctx.Err(); err != nil {
+	orderedNodeIDs, err := orderedNodeIDsByDistance(ctx, distances)
+	if err != nil {
 		return CodeGraphNeighborhood{}, err
 	}
 	selected, requiredEdges, resultNodes, err := selectCodeGraphNeighborhoodNodes(ctx, nodes, orderedNodeIDs, distances, predecessors, resolved.MaximumNodes, resolved.MaximumEdges)
 	if err != nil {
 		return CodeGraphNeighborhood{}, err
 	}
-	reachableEdges := make([]CodeGraphEdge, 0)
-	optionalEdges := make([]CodeGraphEdge, 0)
-	for _, edge := range report.Edges {
-		if err := ctx.Err(); err != nil {
-			return CodeGraphNeighborhood{}, err
-		}
-		if !edgeTypes[edge.Type] || !codeGraphEdgeWithinDirection(edge, distances, resolved.Direction) {
-			continue
-		}
-		reachableEdges = append(reachableEdges, edge)
-		if selected[edge.From] && selected[edge.To] && requiredEdges[edge.ID].ID == "" {
-			optionalEdges = append(optionalEdges, edge)
-		}
-	}
-	sort.Slice(optionalEdges, func(i, j int) bool { return optionalEdges[i].ID < optionalEdges[j].ID })
-	if err := ctx.Err(); err != nil {
+	reachableEdges, optionalEdges, err := selectReachableAndOptionalEdges(ctx, report.Edges, edgeTypes, distances, resolved.Direction, selected, requiredEdges)
+	if err != nil {
 		return CodeGraphNeighborhood{}, err
 	}
-	selectedEdges := make([]CodeGraphEdge, 0, resolved.MaximumEdges)
-	for _, edge := range requiredEdges {
-		selectedEdges = append(selectedEdges, edge)
-	}
-	remaining := resolved.MaximumEdges - len(selectedEdges)
-	if len(optionalEdges) > remaining {
-		optionalEdges = optionalEdges[:remaining]
-	}
-	selectedEdges = append(selectedEdges, optionalEdges...)
-	sort.Slice(selectedEdges, func(i, j int) bool { return selectedEdges[i].ID < selectedEdges[j].ID })
+	selectedEdges := selectFinalEdges(requiredEdges, optionalEdges, resolved.MaximumEdges)
 	omittedNodes := len(orderedNodeIDs) - len(resultNodes)
 	omittedEdges := len(reachableEdges) - len(selectedEdges)
 	selectedReferences := codeGraphNeighborhoodReferences(report.References, selectedEdges)
@@ -152,6 +113,60 @@ func BuildCodeGraphNeighborhoodContext(ctx context.Context, report CodeGraphRepo
 		},
 		Nodes: resultNodes, Edges: selectedEdges, References: selectedReferences,
 	}, nil
+}
+
+func orderedNodeIDsByDistance(ctx context.Context, distances map[string]int) ([]string, error) {
+	ids := make([]string, 0, len(distances))
+	for id := range distances {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	sort.Slice(ids, func(i, j int) bool {
+		left, right := distances[ids[i]], distances[ids[j]]
+		if left != right {
+			return left < right
+		}
+		return ids[i] < ids[j]
+	})
+	return ids, nil
+}
+
+func selectReachableAndOptionalEdges(ctx context.Context, allEdges []CodeGraphEdge, edgeTypes map[string]bool, distances map[string]int, direction string, selected map[string]bool, requiredEdges map[string]CodeGraphEdge) ([]CodeGraphEdge, []CodeGraphEdge, error) {
+	reachable := make([]CodeGraphEdge, 0)
+	optional := make([]CodeGraphEdge, 0)
+	for _, edge := range allEdges {
+		if err := ctx.Err(); err != nil {
+			return nil, nil, err
+		}
+		if !edgeTypes[edge.Type] || !codeGraphEdgeWithinDirection(edge, distances, direction) {
+			continue
+		}
+		reachable = append(reachable, edge)
+		if selected[edge.From] && selected[edge.To] && requiredEdges[edge.ID].ID == "" {
+			optional = append(optional, edge)
+		}
+	}
+	sort.Slice(optional, func(i, j int) bool { return optional[i].ID < optional[j].ID })
+	return reachable, optional, nil
+}
+
+func selectFinalEdges(required map[string]CodeGraphEdge, optional []CodeGraphEdge, maxEdges int) []CodeGraphEdge {
+	selected := make([]CodeGraphEdge, 0, maxEdges)
+	for _, e := range required {
+		selected = append(selected, e)
+	}
+	rem := maxEdges - len(selected)
+	if len(optional) > rem {
+		optional = optional[:rem]
+	}
+	selected = append(selected, optional...)
+	sort.Slice(selected, func(i, j int) bool { return selected[i].ID < selected[j].ID })
+	return selected
 }
 
 func selectCodeGraphNeighborhoodNodes(ctx context.Context, nodes map[string]CodeGraphNode, orderedNodeIDs []string, distances map[string]int, predecessors map[string]codeGraphAdjacent, maximumNodes, maximumEdges int) (map[string]bool, map[string]CodeGraphEdge, []CodeGraphNeighborhoodNode, error) {
@@ -180,40 +195,87 @@ func selectCodeGraphNeighborhoodNodes(ctx context.Context, nodes map[string]Code
 
 func normalizeCodeGraphNeighborhoodOptions(options CodeGraphNeighborhoodOptions) (CodeGraphNeighborhoodOptions, error) {
 	options.SeedNodeIDs = sortedUniqueStrings(options.SeedNodeIDs)
-	if len(options.SeedNodeIDs) == 0 || len(options.SeedNodeIDs) > MaximumCodeGraphNeighborhoodSeeds {
-		return options, fmt.Errorf("seedNodeIds must contain 1 through %d unique IDs", MaximumCodeGraphNeighborhoodSeeds)
+	if err := validateSeedNodeIDs(options.SeedNodeIDs); err != nil {
+		return options, err
 	}
-	if options.Direction == "" {
-		options.Direction = "both"
+	options.Direction = normalizeDirection(options.Direction)
+	if err := validateDirection(options.Direction); err != nil {
+		return options, err
 	}
-	if options.Direction != "incoming" && options.Direction != "outgoing" && options.Direction != "both" {
-		return options, fmt.Errorf("direction must be incoming, outgoing, or both")
-	}
-	if options.Depth < 0 || options.Depth > MaximumCodeGraphNeighborhoodDepth {
-		return options, fmt.Errorf("depth must be between 0 and %d", MaximumCodeGraphNeighborhoodDepth)
+	if err := validateDepth(options.Depth); err != nil {
+		return options, err
 	}
 	if options.EdgeTypes == nil {
 		options.EdgeTypes = []string{"contains", "declares", "imports", "member-of"}
 	}
 	options.EdgeTypes = sortedUniqueStrings(options.EdgeTypes)
-	for _, edgeType := range options.EdgeTypes {
-		if edgeType != "contains" && edgeType != "declares" && edgeType != "imports" && edgeType != "member-of" {
-			return options, fmt.Errorf("unsupported code graph edge type %q", edgeType)
-		}
+	if err := validateEdgeTypes(options.EdgeTypes); err != nil {
+		return options, err
 	}
 	if options.MaximumNodes == 0 {
 		options.MaximumNodes = 100
 	}
-	if options.MaximumNodes < len(options.SeedNodeIDs) || options.MaximumNodes > MaximumCodeGraphNeighborhoodNodes {
-		return options, fmt.Errorf("maxNodes must be at least the seed count and at most %d", MaximumCodeGraphNeighborhoodNodes)
+	if err := validateMaxNodes(options.MaximumNodes, len(options.SeedNodeIDs)); err != nil {
+		return options, err
 	}
-	if options.MaximumEdges == 0 {
-		options.MaximumEdges = 200
-	}
-	if options.MaximumEdges < 0 || options.MaximumEdges > MaximumCodeGraphNeighborhoodEdges {
-		return options, fmt.Errorf("maxEdges must be between 0 and %d", MaximumCodeGraphNeighborhoodEdges)
+	if err := validateMaxEdges(options.MaximumEdges); err != nil {
+		return options, err
 	}
 	return options, nil
+}
+
+func validateSeedNodeIDs(ids []string) error {
+	if len(ids) == 0 || len(ids) > MaximumCodeGraphNeighborhoodSeeds {
+		return fmt.Errorf("seedNodeIds must contain 1 through %d unique IDs", MaximumCodeGraphNeighborhoodSeeds)
+	}
+	return nil
+}
+
+func normalizeDirection(dir string) string {
+	if dir == "" {
+		return "both"
+	}
+	return dir
+}
+
+func validateDirection(dir string) error {
+	if dir != "incoming" && dir != "outgoing" && dir != "both" {
+		return fmt.Errorf("direction must be incoming, outgoing, or both")
+	}
+	return nil
+}
+
+func validateDepth(d int) error {
+	if d < 0 || d > MaximumCodeGraphNeighborhoodDepth {
+		return fmt.Errorf("depth must be between 0 and %d", MaximumCodeGraphNeighborhoodDepth)
+	}
+	return nil
+}
+
+func validateEdgeTypes(types []string) error {
+	for _, t := range types {
+		if t != "contains" && t != "declares" && t != "imports" && t != "member-of" {
+			return fmt.Errorf("unsupported code graph edge type %q", t)
+		}
+	}
+	return nil
+}
+
+func validateMaxNodes(n, seedCount int) error {
+	if n < seedCount || n > MaximumCodeGraphNeighborhoodNodes {
+		return fmt.Errorf("maxNodes must be at least the seed count and at most %d", MaximumCodeGraphNeighborhoodNodes)
+	}
+	return nil
+}
+
+func validateMaxEdges(e int) error {
+	if e == 0 {
+		e = 200
+	}
+	if e < 0 || e > MaximumCodeGraphNeighborhoodEdges {
+		return fmt.Errorf("maxEdges must be between 0 and %d", MaximumCodeGraphNeighborhoodEdges)
+	}
+	return nil
 }
 
 func codeGraphNeighborhoodReferences(references []CodeGraphReference, edges []CodeGraphEdge) []CodeGraphReference {

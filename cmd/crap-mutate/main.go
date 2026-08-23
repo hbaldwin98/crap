@@ -250,23 +250,27 @@ func parseOptionsWithHelp(args []string, help, stderr io.Writer) (cliOptions, bo
 	if options.version {
 		return options, true
 	}
-	if options.language != "csharp" && options.language != "go" && options.language != "typescript" {
-		fmt.Fprintln(stderr, "crap-mutate: --language must be csharp, go, or typescript")
-		return cliOptions{}, false
-	}
-	if options.format != "text" && options.format != "json" && options.format != "sarif" {
-		fmt.Fprintf(stderr, "crap-mutate: unsupported format %q\n", options.format)
-		return cliOptions{}, false
-	}
-	if math.IsNaN(options.minimumScore) || math.IsInf(options.minimumScore, 0) || options.minimumScore < 0 || options.minimumScore > 100 {
-		fmt.Fprintln(stderr, "crap-mutate: minimum score must be between 0 and 100")
-		return cliOptions{}, false
-	}
-	if options.timeout < time.Second {
-		fmt.Fprintln(stderr, "crap-mutate: timeout must be at least one second")
+	if message := cliOptionsProblem(options); message != "" {
+		fmt.Fprint(stderr, message)
 		return cliOptions{}, false
 	}
 	return options, true
+}
+
+func cliOptionsProblem(options cliOptions) string {
+	if options.language != "csharp" && options.language != "go" && options.language != "typescript" {
+		return "crap-mutate: --language must be csharp, go, or typescript\n"
+	}
+	if options.format != "text" && options.format != "json" && options.format != "sarif" {
+		return fmt.Sprintf("crap-mutate: unsupported format %q\n", options.format)
+	}
+	if math.IsNaN(options.minimumScore) || math.IsInf(options.minimumScore, 0) || options.minimumScore < 0 || options.minimumScore > 100 {
+		return "crap-mutate: minimum score must be between 0 and 100\n"
+	}
+	if options.timeout < time.Second {
+		return "crap-mutate: timeout must be at least one second\n"
+	}
+	return ""
 }
 
 func writeUsage(writer io.Writer, flags *flag.FlagSet) {
@@ -354,23 +358,10 @@ type mutationSARIFProperties struct {
 }
 
 func mutationSARIF(report mutation.Report, root string) (sarif.Log, error) {
-	mutants := append([]mutation.MutantResult(nil), report.Mutants...)
-	sort.Slice(mutants, func(i, j int) bool {
-		left, right := mutants[i], mutants[j]
-		if left.File != right.File {
-			return left.File < right.File
-		}
-		if left.StartLine != right.StartLine {
-			return left.StartLine < right.StartLine
-		}
-		if left.StartColumn != right.StartColumn {
-			return left.StartColumn < right.StartColumn
-		}
-		return left.ID < right.ID
-	})
+	mutants := sortedMutationResults(report)
 	actionableCount := 0
 	for _, mutant := range mutants {
-		if mutant.Status == "survived" || mutant.Status == "noCoverage" {
+		if mutantSARIFRuleID(mutant.Status) != "" {
 			actionableCount++
 		}
 	}
@@ -380,13 +371,8 @@ func mutationSARIF(report mutation.Report, root string) (sarif.Log, error) {
 	results := make([]sarif.Result, 0, actionableCount)
 	sources := make(map[string]*sarif.Source)
 	for _, mutant := range mutants {
-		ruleID := ""
-		switch mutant.Status {
-		case "survived":
-			ruleID = "MUT001"
-		case "noCoverage":
-			ruleID = "MUT002"
-		default:
+		ruleID := mutantSARIFRuleID(mutant.Status)
+		if ruleID == "" {
 			continue
 		}
 		source := sources[mutant.File]
@@ -398,23 +384,7 @@ func mutationSARIF(report mutation.Report, root string) (sarif.Log, error) {
 			}
 			sources[mutant.File] = source
 		}
-		var region sarif.Region
-		var err error
-		switch report.Engine {
-		case "gremlins":
-			region, err = source.BytePointRegion(mutant.StartLine, mutant.StartColumn)
-		case "stryker-js", "stryker-net":
-			if mutant.EndLine == nil || mutant.EndColumn == nil {
-				return sarif.Log{}, fmt.Errorf("convert SARIF location for %s: Stryker range has no end", mutant.ID)
-			}
-			if mutant.StartLine == *mutant.EndLine && mutant.StartColumn == *mutant.EndColumn {
-				region, err = source.UTF16PointRegion(mutant.StartLine, mutant.StartColumn)
-			} else {
-				region, err = source.UTF16Region(mutant.StartLine, mutant.StartColumn, *mutant.EndLine, *mutant.EndColumn)
-			}
-		default:
-			return sarif.Log{}, fmt.Errorf("convert SARIF location for %s: unsupported engine %q", mutant.ID, report.Engine)
-		}
+		region, err := mutantSARIFRegion(source, mutant, report.Engine)
 		if err != nil {
 			return sarif.Log{}, fmt.Errorf("convert SARIF location for %s: %w", mutant.ID, err)
 		}
@@ -432,7 +402,57 @@ func mutationSARIF(report mutation.Report, root string) (sarif.Log, error) {
 			},
 		})
 	}
-	rules := []sarif.Rule{
+	return sarif.New("crap-mutate", buildinfo.CurrentVersion(), mutationSARIFRules(), results), nil
+}
+
+func sortedMutationResults(report mutation.Report) []mutation.MutantResult {
+	mutants := append([]mutation.MutantResult(nil), report.Mutants...)
+	sort.Slice(mutants, func(i, j int) bool {
+		left, right := mutants[i], mutants[j]
+		if left.File != right.File {
+			return left.File < right.File
+		}
+		if left.StartLine != right.StartLine {
+			return left.StartLine < right.StartLine
+		}
+		if left.StartColumn != right.StartColumn {
+			return left.StartColumn < right.StartColumn
+		}
+		return left.ID < right.ID
+	})
+	return mutants
+}
+
+func mutantSARIFRuleID(status string) string {
+	switch status {
+	case "survived":
+		return "MUT001"
+	case "noCoverage":
+		return "MUT002"
+	default:
+		return ""
+	}
+}
+
+func mutantSARIFRegion(source *sarif.Source, mutant mutation.MutantResult, engine string) (sarif.Region, error) {
+	switch engine {
+	case "gremlins":
+		return source.BytePointRegion(mutant.StartLine, mutant.StartColumn)
+	case "stryker-js", "stryker-net":
+		if mutant.EndLine == nil || mutant.EndColumn == nil {
+			return sarif.Region{}, fmt.Errorf("Stryker range has no end")
+		}
+		if mutant.StartLine == *mutant.EndLine && mutant.StartColumn == *mutant.EndColumn {
+			return source.UTF16PointRegion(mutant.StartLine, mutant.StartColumn)
+		}
+		return source.UTF16Region(mutant.StartLine, mutant.StartColumn, *mutant.EndLine, *mutant.EndColumn)
+	default:
+		return sarif.Region{}, fmt.Errorf("unsupported engine %q", engine)
+	}
+}
+
+func mutationSARIFRules() []sarif.Rule {
+	return []sarif.Rule{
 		{
 			ID: "MUT001", Name: "SurvivedMutant", ShortDescription: sarif.Message{Text: "Mutation survived the test suite"},
 			FullDescription: sarif.Message{Text: "A source mutation was exercised but not detected by the test suite."},
@@ -444,5 +464,4 @@ func mutationSARIF(report mutation.Report, root string) (sarif.Log, error) {
 			Help:            sarif.Message{Text: "Add tests that execute this source location and assert its behavior."},
 		},
 	}
-	return sarif.New("crap-mutate", buildinfo.CurrentVersion(), rules, results), nil
 }
