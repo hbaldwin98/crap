@@ -24,6 +24,10 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   file/type/callable inventory, immutable paged MCP access, and coherent bounded
   neighborhoods. `crap graph --format json` exposes the full graph as an
   AI-consumable structural contract; `text` summarizes it.
+- Architecture analysis through `crap arch`: declarative JSON dependency rules
+  with anchored glob matching, deterministic strongly-connected-component cycle
+  witnesses backed by import references, an exit code usable as a CI gate, and
+  published v1 JSON schemas for reports and rules inputs.
 
 ### Changed
 

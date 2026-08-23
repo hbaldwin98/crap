@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "architecture-v1.schema.json",
+  "$defs": {
+    "summary": {"type": "object", "required": ["modules", "edges", "cycles", "violations", "complete"], "properties": {"modules": {"type": "integer", "minimum": 0}, "edges": {"type": "integer", "minimum": 0}, "cycles": {"type": "integer", "minimum": 0}, "violations": {"type": "integer", "minimum": 0}, "complete": {"type": "boolean"}}, "additionalProperties": false},
+    "edgeReference": {"type": "object", "required": ["from", "to", "references"], "properties": {"from": {"type": "string", "minLength": 1}, "to": {"type": "string", "minLength": 1}, "references": {"type": "array", "items": {"$ref": "common.schema.json#/$defs/digest"}}}, "additionalProperties": false},
+    "cycle": {"type": "object", "required": ["modules", "edges"], "properties": {"modules": {"type": "array", "minItems": 1, "items": {"$ref": "common.schema.json#/$defs/digest"}}, "edges": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/edgeReference"}}}, "additionalProperties": false},
+    "violation": {"type": "object", "required": ["kind", "system", "from", "to", "reason"], "properties": {"kind": {"enum": ["cycle", "forbid"]}, "system": {"oneOf": [{"const": ""}, {"enum": ["go-package", "ecmascript-file", "csharp-namespace"]}]}, "from": {"type": "string", "minLength": 1}, "to": {"type": "string", "minLength": 1}, "reason": {"type": "string"}, "edges": {"type": "array", "items": {"$ref": "#/$defs/edgeReference"}}}, "additionalProperties": false}
+  },
+  "type": "object",
+  "required": ["schemaVersion", "reportType", "summary", "cycles", "violations", "limitations"],
+  "properties": {
+    "schemaVersion": {"const": "1"},
+    "reportType": {"const": "architecture"},
+    "summary": {"$ref": "#/$defs/summary"},
+    "cycles": {"type": "array", "items": {"$ref": "#/$defs/cycle"}},
+    "violations": {"type": "array", "items": {"$ref": "#/$defs/violation"}},
+    "limitations": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}}
+  },
+  "additionalProperties": false
+}

@@ -99,6 +99,7 @@ crap [options] [path ...]
 crap scope actual --diff-base REVISION [options] [path ...]
 crap compare --base REVISION [options] [path ...]
 crap graph [options] [path ...]
+crap arch [options] [path ...]
 crap mcp
 ```
 
@@ -266,6 +267,39 @@ The `code-graph` v1 report contains logical module, file, type-declaration occur
 Module identity is language-specific: Go packages use the root `go.mod` module directive plus source directory and package clause; TypeScript and TSX use source-file modules; C# uses declared namespaces. Resolution is deliberately bounded to selected repository source. Go workspaces, replacements, build tags, and vendor rules; TypeScript `tsconfig`, package exports, and path aliases; and C# assembly/project binding remain unresolved. Type nodes are source declaration occurrences, not compiler-resolved semantic types. Calls, runtime dispatch, and behavioral impact remain unmodeled. These limits are included in every report.
 
 Graph output supports `text` and `json`. The JSON report is the AI-consumable contract for understanding application structure: nodes with module/type/callable identity and metrics, exact lexical `contains`/`declares` edges, module `member-of` and resolved `imports` edges, and every recognized import or using reference with resolution status, targets, candidates, and reasons. Text summarizes modules, references, and limitations.
+
+### Architecture
+
+Evaluate architecture rules against the module dependency graph:
+
+```sh
+crap arch --format json .
+```
+
+Import cycles are forbidden by default. A rules file adds layering constraints:
+
+```json
+{
+  "schemaVersion": "1",
+  "forbidCycles": true,
+  "forbid": [
+    {
+      "from": "**/cmd/**",
+      "to": "**/internal/mutation",
+      "system": "go-package",
+      "reason": "commands must go through the service layer"
+    }
+  ]
+}
+```
+
+```sh
+crap arch --rules arch-rules.json .
+```
+
+Every nontrivial strongly connected component is reported as a cycle with a deterministic edge witness: an ordered list of module dependency edges covering the component, each with the import references that justify it. Forbid rules match module names with anchored globs where `*` stays within a path segment, `**` crosses separators, `?` matches one non-separator character, and an empty pattern matches every module; `system` optionally restricts a rule to `go-package`, `ecmascript-file`, or `csharp-namespace` modules. Dependencies are allowed unless a rule forbids them.
+
+The `architecture` v1 report is pure evidence: module and edge counts, cycle witnesses, and violations sorted by `from`, `to`, and kind. Exit code `2` is returned when any violation exists, so the command works as a CI gate. Architecture analysis inherits the code graph's bounded selected-source semantics: unresolved imports are not violations, and static lexical imports never prove runtime behavior. The report and rules JSON schemas are published under [`schemas/v1`](schemas/v1).
 
 ## MCP Server
 
@@ -497,7 +531,7 @@ Both MCP servers publish initialization instructions that tell capable clients w
 
 ## Report Contracts
 
-JSON outputs carry `reportType`, `schemaVersion`, one shared tool version, coordinate semantics, and deterministic fingerprints. Analysis is v6, actual change scope is v1, change-scope comparison is v1, code graph and code-graph neighborhoods are v1, mutation is v3, mutation plans are v2, and mutation doctor output has its independent v1 contract. Incompatible changes increment the contract that changed; MCP envelope versions are independent from their underlying report versions. Analysis v5 added Go function literals and C# lambdas, anonymous methods, and expression-bodied properties/indexers. Analysis v6 adds deterministic source-discovery policy and metadata.
+JSON outputs carry `reportType`, `schemaVersion`, one shared tool version, coordinate semantics, and deterministic fingerprints. Analysis is v6, actual change scope is v1, change-scope comparison is v1, code graph and code-graph neighborhoods are v1, architecture reports and rules inputs are v1, mutation is v3, mutation plans are v2, and mutation doctor output has its independent v1 contract. Incompatible changes increment the contract that changed; MCP envelope versions are independent from their underlying report versions. Analysis v5 added Go function literals and C# lambdas, anonymous methods, and expression-bodied properties/indexers. Analysis v6 adds deterministic source-discovery policy and metadata.
 
 Normalized analysis coordinates are 1-based UTF-8 byte columns with exclusive ends. Normalized mutation coordinates remain engine-native. SARIF is a separate presentation contract and converts or validates both forms as 1-based UTF-16 code units for GitHub. Analysis callable names, signatures, and ranges come from the language AST. Callable IDs hash language, normalized file path, kind, lexical signature, and same-signature occurrence, so inserting blank lines above a callable does not change its ID. Mutation wrapper IDs hash normalized file, range, mutator, and replacement; Stryker's `nativeId` and status do not affect them.
 
@@ -513,8 +547,8 @@ Change intelligence will grow from deterministic evidence rather than inferred i
 2. Completed: lexical language-neutral file, type-declaration, and callable inventory.
 3. Completed: bounded selected-source module dependency graph with explicit unresolved references.
 4. Completed: AI-consumable `crap graph` JSON and text structural contract.
-5. Next: architecture rules and cycle proofs.
-6. Compiler-backed call relationships and affected-test traversal.
+5. Completed: architecture rules and cycle proofs.
+6. Next: compiler-backed call relationships and affected-test traversal.
 7. Unified change oracle joining scope, quality, tests, and architecture evidence.
 
 Each phase must keep engine facts, unresolved edges, and AI or user judgment distinct.

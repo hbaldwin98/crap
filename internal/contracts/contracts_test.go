@@ -1,6 +1,7 @@
 package contracts_test
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"os/exec"
@@ -35,6 +36,8 @@ var contractFixtures = map[string]string{
 	"code-graph-v1.schema.json":                  "code-graph-v1.json",
 	"code-graph-mcp-page-v1.schema.json":         "code-graph-mcp-page-v1.json",
 	"code-graph-neighborhood-mcp-v1.schema.json": "code-graph-neighborhood-mcp-v1.json",
+	"architecture-v1.schema.json":                "architecture-v1.json",
+	"architecture-rules-v1.schema.json":          "architecture-rules-v1.json",
 }
 
 func TestGoldenContractFixtures(t *testing.T) {
@@ -95,6 +98,11 @@ func TestGeneratedAnalysisAndPlanValidate(t *testing.T) {
 		t.Fatal(err)
 	}
 	validateValue(t, filepath.Join(root, "schemas", "v1", "code-graph-v1.schema.json"), graph)
+	architecture, err := analysis.AnalyzeArchitecture(context.Background(), graph, analysis.ArchitectureRules{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	validateValue(t, filepath.Join(root, "schemas", "v1", "architecture-v1.schema.json"), architecture)
 	expiresAt := time.Date(2026, time.August, 21, 12, 0, 0, 0, time.UTC).Format(time.RFC3339)
 	validateValue(t, filepath.Join(root, "schemas", "v1", "code-graph-mcp-page-v1.schema.json"), mcpserver.CodeGraphOutput{
 		PageSchemaVersion: "1", ReportType: "code-graph-page", ReportID: strings.Repeat("3", 32), ExpiresAt: expiresAt,

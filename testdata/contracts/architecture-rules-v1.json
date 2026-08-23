@@ -1,0 +1,7 @@
+{
+  "schemaVersion": "1",
+  "forbidCycles": true,
+  "forbid": [
+    {"from": "**/internal/a", "to": "**/internal/c", "system": "go-package", "reason": "a must not depend on c"}
+  ]
+}

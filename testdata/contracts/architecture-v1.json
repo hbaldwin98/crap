@@ -1,0 +1,20 @@
+{
+  "schemaVersion": "1", "reportType": "architecture",
+  "summary": {"modules": 3, "edges": 3, "cycles": 1, "violations": 2, "complete": false},
+  "cycles": [
+    {"modules": ["1111111111111111111111111111111111111111111111111111111111111111", "2222222222222222222222222222222222222222222222222222222222222222"], "edges": [
+      {"from": "go-package/example/internal/a", "to": "go-package/example/internal/b", "references": ["3333333333333333333333333333333333333333333333333333333333333333"]},
+      {"from": "go-package/example/internal/b", "to": "go-package/example/internal/a", "references": ["4444444444444444444444444444444444444444444444444444444444444444"]}
+    ]}
+  ],
+  "violations": [
+    {"kind": "cycle", "system": "", "from": "go-package/example/internal/a", "to": "go-package/example/internal/b", "reason": "import cycle", "edges": [
+      {"from": "go-package/example/internal/a", "to": "go-package/example/internal/b", "references": ["3333333333333333333333333333333333333333333333333333333333333333"]},
+      {"from": "go-package/example/internal/b", "to": "go-package/example/internal/a", "references": ["4444444444444444444444444444444444444444444444444444444444444444"]}
+    ]},
+    {"kind": "forbid", "system": "go-package", "from": "go-package/example/internal/a", "to": "go-package/example/internal/c", "reason": "a must not depend on c", "edges": [
+      {"from": "go-package/example/internal/a", "to": "go-package/example/internal/c", "references": ["5555555555555555555555555555555555555555555555555555555555555555"]}
+    ]}
+  ],
+  "limitations": ["module resolution is bounded to selected source and may be incomplete", "dependency evidence is static lexical imports and never proves runtime behavior"]
+}
