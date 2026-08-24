@@ -189,6 +189,7 @@ func newCodeGraphReport(report Report) CodeGraphReport {
 			"Go receiver-to-type associations and cross-file declaration merging are not modeled",
 			"static imports and using directives resolve only against selected repository sources",
 			"Go workspaces, replacements, build tags, vendor rules, TypeScript configuration, and C# assembly binding are not modeled",
+			"Rust editions, Cargo metadata, external crates, inline mod blocks, #[path] attributes, and cfg gating are not modeled",
 			"calls, runtime dispatch, and behavioral impact are not modeled",
 		},
 		Diagnostics: append(make([]Diagnostic, 0, len(report.Diagnostics)), report.Diagnostics...),

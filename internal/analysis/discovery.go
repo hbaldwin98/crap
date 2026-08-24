@@ -403,26 +403,34 @@ func (result discoveryResult) metadata() DiscoveryMetadata {
 	return metadata
 }
 
+var (
+	ignoredDirectoriesAnywhere = map[string]bool{".git": true, "node_modules": true, ".next": true, "bin": true, "obj": true, "testdata": true}
+	ignoredRootDirectories     = map[string]bool{"vendor": true, "dist": true, "build": true, "coverage": true, "target": true}
+)
+
 func builtInIgnoredDirectory(relative string, isDir bool) bool {
 	if !isDir {
 		return false
 	}
 	base := strings.ToLower(filepath.Base(filepath.FromSlash(relative)))
-	if base == ".git" || base == "node_modules" || base == ".next" || base == "bin" || base == "obj" || base == "testdata" {
+	if ignoredDirectoriesAnywhere[base] {
 		return true
 	}
-	return !strings.Contains(relative, "/") && (base == "vendor" || base == "dist" || base == "build" || base == "coverage")
+	return !strings.Contains(relative, "/") && ignoredRootDirectories[base]
 }
 
 func supportedSource(path string) bool {
 	extension := strings.ToLower(filepath.Ext(path))
-	return extension == ".cs" || extension == ".go" || extension == ".ts" || extension == ".tsx"
+	return extension == ".cs" || extension == ".go" || extension == ".rs" || extension == ".ts" || extension == ".tsx"
 }
 
 func isTestSource(path string) bool {
 	extension := strings.ToLower(filepath.Ext(path))
 	if extension == ".go" {
 		return strings.HasSuffix(strings.ToLower(path), "_test.go")
+	}
+	if extension == ".rs" {
+		return isRustTest(path)
 	}
 	return (extension == ".ts" || extension == ".tsx") && isTypeScriptTest(path)
 }
@@ -443,6 +451,19 @@ func pathWithinRoot(root, candidate string) bool {
 		return false
 	}
 	return relative == "." || (relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator)))
+}
+
+// isRustTest matches Cargo's integration test and benchmark layout, the only
+// test locations a Rust file path can identify. Unit tests live inside ordinary
+// modules and are not distinguishable by path.
+func isRustTest(path string) bool {
+	slashed := strings.ToLower(filepath.ToSlash(path))
+	for _, directory := range []string{"tests/", "benches/"} {
+		if strings.HasPrefix(slashed, directory) || strings.Contains(slashed, "/"+directory) {
+			return true
+		}
+	}
+	return false
 }
 
 func isTypeScriptTest(path string) bool {

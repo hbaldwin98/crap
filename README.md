@@ -6,7 +6,7 @@
 
 This repository contains two tools:
 
-- `crap` deterministically calculates cyclomatic complexity and CRAP scores for C#, Go, TypeScript, and TSX callables.
+- `crap` deterministically calculates cyclomatic complexity and CRAP scores for C#, Go, Rust, TypeScript, and TSX callables.
 - `crap-mutate` runs a language-native mutation engine and converts its output into one stable report for C#, Go, and TypeScript.
 
 Both tools can run from the command line or as separate MCP stdio servers.
@@ -90,7 +90,7 @@ You can also run it from source without building a separate executable:
 go run ./cmd/crap --format json .
 ```
 
-If no path is supplied, `crap` analyzes the current directory. Go `_test.go` and TypeScript `.spec`/`.test` files are excluded by default because tests produce coverage evidence but should not normally be scored as production callables.
+If no path is supplied, `crap` analyzes the current directory. Go `_test.go`, Rust `tests/` and `benches/`, and TypeScript `.spec`/`.test` files are excluded by default because tests produce coverage evidence but should not normally be scored as production callables.
 
 ## CLI Usage
 
@@ -114,7 +114,7 @@ Options:
 | `--diff-base REVISION` | none | Return only callables touching lines changed from a Git revision. |
 | `--threshold SCORE` | `30` | Mark scores strictly greater than this value as above threshold. |
 | `--fail-on-threshold` | `false` | Exit with code `2` when any returned callable is above threshold. |
-| `--include-tests` | `false` | Include Go `_test.go` and TypeScript `.spec`/`.test` files. |
+| `--include-tests` | `false` | Include Go `_test.go`, Rust `tests/` and `benches/`, and TypeScript `.spec`/`.test` files. |
 | `--include-generated` | `false` | Include recognized generated C# and TypeScript files. |
 | `--exclude PATTERN` | none | Exclude a root-relative gitignore-style pattern; repeat as needed. |
 | `--strict-coverage` | `false` | Fail when a supplied coverage report has unmatched or ambiguous source paths. |
@@ -185,6 +185,9 @@ For C# or TypeScript, export coverage in Cobertura XML format with the test runn
 crap --coverage coverage.xml src/Example.cs
 ```
 
+For Rust, emit Cobertura from a coverage tool such as `cargo llvm-cov --cobertura`
+or `cargo tarpaulin --out Xml`, then pass that file the same way.
+
 The same command accepts TypeScript coverage from tools that emit Cobertura:
 
 ```sh
@@ -204,10 +207,10 @@ The `.spec.ts` and `.test.ts` files execute and generate coverage for applicatio
 
 Accepted formats:
 
-- Cobertura XML, matched to C#, Go, TypeScript, or TSX source by normalized file path
+- Cobertura XML, matched to C#, Go, Rust, TypeScript, or TSX source by normalized file path
 - Native Go coverprofiles produced by `go test -coverprofile`
 
-Cobertura coverage uses line-hit records. Go coverprofiles use their native statement counts. Callable names and ranges always come from the C#, Go, or TypeScript AST; Cobertura method names are ignored because instrumentation and source-map processing can rewrite them. A nested callable owns its own lines, so its coverage is excluded from its parent.
+Cobertura coverage uses line-hit records. Go coverprofiles use their native statement counts. Callable names and ranges always come from the C#, Go, Rust, or TypeScript AST; Cobertura method names are ignored because instrumentation and source-map processing can rewrite them. A nested callable owns its own lines, so its coverage is excluded from its parent.
 
 Coverage paths are matched by exact normalized path, then by a unique component suffix, then by a unique case-insensitive match. Cobertura `<sources>` entries and both slash styles are supported. Non-exact matches produce deterministic diagnostics. Unmatched or ambiguous files retain `coveragePercent: null` and are conservatively scored as 0% coverage; use `--strict-coverage` in CI to reject those reports instead.
 
@@ -265,7 +268,7 @@ crap graph --format json .
 
 The `code-graph` v1 report contains logical module, file, type-declaration occurrence, and callable nodes. Exact Tree-sitter lexical relationships use `contains` and `declares`; files connect to modules through `member-of`; resolved internal static imports aggregate into module-to-module `imports` edges. Every recognized import or using occurrence remains available as a resolved, unresolved, or ambiguous reference. Callable and module nodes expose complexity, optional coverage, CRAP, and threshold status. Nodes, edges, references, and candidates are canonically sorted. Full graph construction fails instead of silently truncating above 100,000 nodes, 250,000 edges, 250,000 references, or 64 containment levels. A file root is level 1; the depth limit applies to text, JSON, and MCP output.
 
-Module identity is language-specific: Go packages use the root `go.mod` module directive plus source directory and package clause; TypeScript and TSX use source-file modules; C# uses declared namespaces. Resolution is deliberately bounded to selected repository source. Go workspaces, replacements, build tags, and vendor rules; TypeScript `tsconfig`, package exports, and path aliases; and C# assembly/project binding remain unresolved. Type nodes are source declaration occurrences, not compiler-resolved semantic types. Calls, runtime dispatch, and behavioral impact remain unmodeled. These limits are included in every report.
+Module identity is language-specific: Go packages use the root `go.mod` module directive plus source directory and package clause; TypeScript and TSX use source-file modules; Rust uses `crate::`-rooted module paths derived from file layout (`src` as the crate source root, `lib.rs`, `main.rs`, and `mod.rs` naming their parent); C# uses declared namespaces. Resolution is deliberately bounded to selected repository source. Go workspaces, replacements, build tags, and vendor rules; TypeScript `tsconfig`, package exports, and path aliases; Rust `Cargo.toml` metadata, editions, external crates, inline `mod` blocks, `#[path]` attributes, and `cfg` gating; and C# assembly/project binding remain unresolved. Type nodes are source declaration occurrences, not compiler-resolved semantic types. Calls, runtime dispatch, and behavioral impact remain unmodeled. These limits are included in every report.
 
 Graph output supports `text` and `json`. The JSON report is the AI-consumable contract for understanding application structure: nodes with module/type/callable identity and metrics, exact lexical `contains`/`declares` edges, module `member-of` and resolved `imports` edges, and every recognized import or using reference with resolution status, targets, candidates, and reasons. Text summarizes modules, references, and limitations.
 
@@ -298,7 +301,7 @@ Import cycles are forbidden by default. A rules file adds layering constraints:
 crap arch --rules arch-rules.json .
 ```
 
-Every nontrivial strongly connected component is reported as a cycle with a deterministic edge witness: an ordered list of module dependency edges covering the component, each with the import references that justify it. Forbid rules match module names with anchored globs where `*` stays within a path segment, `**` crosses separators, `?` matches one non-separator character, and an empty pattern matches every module; `system` optionally restricts a rule to `go-package`, `ecmascript-file`, or `csharp-namespace` modules. Dependencies are allowed unless a rule forbids them.
+Every nontrivial strongly connected component is reported as a cycle with a deterministic edge witness: an ordered list of module dependency edges covering the component, each with the import references that justify it. Forbid rules match module names with anchored globs where `*` stays within a path segment, `**` crosses separators, `?` matches one non-separator character, and an empty pattern matches every module; `system` optionally restricts a rule to `go-package`, `ecmascript-file`, `rust-module`, or `csharp-namespace` modules. Dependencies are allowed unless a rule forbids them.
 
 The `architecture` v1 report is pure evidence: module and edge counts, cycle witnesses, and violations sorted by `from`, `to`, and kind. Exit code `2` is returned when any violation exists, so the command works as a CI gate. Architecture analysis inherits the code graph's bounded selected-source semantics: unresolved imports are not violations, and static lexical imports never prove runtime behavior. The report and rules JSON schemas are published under [`schemas/v1`](schemas/v1).
 
@@ -349,7 +352,7 @@ The server exposes analysis, change-scope, comparison, and code-graph tools. `an
 | `coveragePath` | string | none | Read Cobertura XML or a Go coverprofile, relative to `root`. |
 | `diffBase` | string | none | Return only callables changed from this Git revision. |
 | `crapThreshold` | number | `30` | Mark scores strictly greater than this value as above threshold. |
-| `includeTests` | boolean | `false` | Include Go `_test.go` and TypeScript `.spec`/`.test` files. |
+| `includeTests` | boolean | `false` | Include Go `_test.go`, Rust `tests/` and `benches/`, and TypeScript `.spec`/`.test` files. |
 | `includeGenerated` | boolean | `false` | Include recognized generated C# and TypeScript files. |
 | `exclude` | string array | none | Add root-relative gitignore-style exclusions; negated entries are rejected. |
 | `strictCoverage` | boolean | `false` | Fail when supplied coverage paths are unmatched or ambiguous. |
@@ -592,6 +595,8 @@ C# callables are methods, constructors, destructors, operators, local functions,
 The bundled C# grammar supports C# 1 through C# 13. The analyzer rejects syntax errors rather than silently producing a partial score.
 
 Go callables are functions, methods, and function literals. Go adds one for each `if`, `for`, non-default expression/type/communication `case`, and `&&` or `||` expression. Nested function literals are scored separately.
+
+Rust callables are functions and closures. Rust adds one for each `if`, `while`, `for`, non-catch-all `match` arm, `?` operator, and `&&` or `||` expression. Trait method signatures without a body are not callables, and `loop` is unconditional and adds nothing. Names are `::`-qualified by enclosing `mod`, `trait`, and `impl` scopes, with trait impls written as `<Type as Trait>::name`. Macro bodies are not expanded, so complexity generated by a macro invocation is not counted. Nested closures are scored separately.
 
 TypeScript and TSX callables are functions, generator functions, methods, function expressions, generator function expressions, and arrow functions. They add one for each `if`, `for`, `for in`/`for of`, `while`, `do`, `catch`, non-default `case`, ternary, and `&&`, `||`, or `??` expression. Nested callables are scored separately.
 

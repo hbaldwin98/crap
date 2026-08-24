@@ -13,7 +13,7 @@ import (
 
 type AnalyzeCodeGraphInput struct {
 	Root             string   `json:"root,omitempty" jsonschema:"Working directory used to resolve source and coverage paths. Defaults to the MCP server working directory."`
-	Paths            []string `json:"paths,omitempty" jsonschema:"C#, Go, TypeScript, or TSX files and directories to inventory. Defaults to the root directory."`
+	Paths            []string `json:"paths,omitempty" jsonschema:"C#, Go, Rust, TypeScript, or TSX files and directories to inventory. Defaults to the root directory."`
 	CoveragePath     string   `json:"coveragePath,omitempty" jsonschema:"Optional Cobertura XML or Go coverprofile used to decorate callable nodes."`
 	CRAPThreshold    *float64 `json:"crapThreshold,omitempty" jsonschema:"Score above which callable nodes are flagged. Defaults to 30."`
 	IncludeTests     bool     `json:"includeTests,omitempty" jsonschema:"Include Go _test.go and TypeScript .spec/.test files. Defaults to false."`

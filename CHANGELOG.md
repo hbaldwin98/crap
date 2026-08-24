@@ -9,6 +9,10 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Deterministic CRAP analysis for C#, Go, TypeScript, and TSX, including
   callable-aware coverage and Git changed-code filtering.
+- Rust analysis: complexity, CRAP, code graph, change scope, and
+  architecture rules for `.rs` sources, with `crate::`-rooted module paths
+  resolved from `use`, `mod`, `self::`, and `super::` references. Mutation
+  testing remains C#, Go, and TypeScript only.
 - CLI, JSON, SARIF 2.1.0, and paged MCP stdio interfaces.
 - Mutation orchestration and normalized reports for Stryker.NET, Gremlins, and
   StrykerJS, with planning and setup diagnostics.

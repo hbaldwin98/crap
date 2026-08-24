@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/hbaldwin98/crap/internal/rootauth"
@@ -250,5 +251,31 @@ func TestFindSourceFilesRejectsSymlinkOutsideRoot(t *testing.T) {
 	}
 	if _, err := findSourceFiles(root, []string{"link.go"}, nil, false, false, nil); err == nil {
 		t.Fatal("outside source symlink was accepted")
+	}
+}
+
+func TestFindSourceFilesTreatsCargoTestLayoutsAsTests(t *testing.T) {
+	root := t.TempDir()
+	for _, name := range []string{"src/lib.rs", "tests/integration.rs", "benches/speed.rs", "target/debug/build.rs"} {
+		if err := os.MkdirAll(filepath.Dir(filepath.Join(root, name)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, name), nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	discovery, err := findSourceFiles(root, []string{"."}, nil, false, false, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(discovery.files) != 1 || !strings.HasSuffix(discovery.files[0], "lib.rs") {
+		t.Fatalf("default files = %v, want only src/lib.rs", discovery.files)
+	}
+	discovery, err = findSourceFiles(root, []string{"."}, nil, true, false, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(discovery.files) != 3 {
+		t.Fatalf("files with tests = %v, want three source files outside target/", discovery.files)
 	}
 }

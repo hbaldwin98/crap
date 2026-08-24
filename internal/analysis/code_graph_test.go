@@ -319,3 +319,73 @@ func writeGraphSource(t *testing.T, root, name, source string) {
 		t.Fatal(err)
 	}
 }
+
+func TestAnalyzeCodeGraphResolvesRustModulePaths(t *testing.T) {
+	root := t.TempDir()
+	writeGraphSource(t, root, "src/lib.rs", "mod parser;\npub mod util;\nuse crate::parser::Parser;\nuse std::collections::HashMap;\npub fn run(map: HashMap<i32, Parser>) -> usize { map.len() }\n")
+	writeGraphSource(t, root, "src/parser.rs", "use super::run;\npub struct Parser;\n")
+	writeGraphSource(t, root, "src/util/mod.rs", "use crate::parser::Parser;\npub fn helper(parser: &Parser) -> bool { true }\n")
+	analyzer, err := NewAnalyzer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	report, err := analyzer.AnalyzeCodeGraph(CodeGraphOptions{Root: root, Paths: []string{"src"}, CRAPThreshold: 30})
+	if err != nil {
+		t.Fatal(err)
+	}
+	modules := graphModulesByName(report.Nodes)
+	if modules["crate"] == "" || modules["crate::parser"] == "" || modules["crate::util"] == "" {
+		t.Fatalf("modules = %#v", modules)
+	}
+	resolutions := make(map[string]string, len(report.References))
+	for _, reference := range report.References {
+		resolutions[reference.Kind+" "+reference.Specifier] = reference.Resolution + " " + reference.Reason
+	}
+	want := map[string]string{
+		"rust-mod crate::parser":             "resolved ",
+		"rust-mod crate::util":               "resolved ",
+		"rust-use crate::parser::Parser":     "resolved ",
+		"rust-use super::run":                "resolved ",
+		"rust-use std::collections::HashMap": "unresolved non-crate-specifier",
+	}
+	for reference, expected := range want {
+		if resolutions[reference] != expected {
+			t.Fatalf("reference %q = %q, want %q (all: %#v)", reference, resolutions[reference], expected, resolutions)
+		}
+	}
+}
+
+func TestRustUseDeclarationsExpandToOneReferencePerLeaf(t *testing.T) {
+	root := t.TempDir()
+	writeGraphSource(t, root, "src/lib.rs", "pub mod a;\npub mod b;\nuse crate::{a::First, b::{Second as Renamed, third::*}};\npub fn run() {}\n")
+	writeGraphSource(t, root, "src/a.rs", "pub struct First;\n")
+	writeGraphSource(t, root, "src/b/mod.rs", "pub mod third;\npub struct Second;\n")
+	writeGraphSource(t, root, "src/b/third.rs", "pub fn value() -> i32 { 1 }\n")
+	analyzer, err := NewAnalyzer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	report, err := analyzer.AnalyzeCodeGraph(CodeGraphOptions{Root: root, Paths: []string{"src"}, CRAPThreshold: 30})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bindings := make(map[string]string)
+	for _, reference := range report.References {
+		if reference.Kind == "rust-use" || reference.Kind == "rust-use-glob" {
+			bindings[reference.Specifier] = reference.Binding
+		}
+	}
+	want := map[string]string{
+		"crate::a::First":  "First",
+		"crate::b::Second": "Renamed",
+		"crate::b::third":  "*",
+	}
+	if len(bindings) != len(want) {
+		t.Fatalf("use references = %#v, want %#v", bindings, want)
+	}
+	for specifier, binding := range want {
+		if bindings[specifier] != binding {
+			t.Fatalf("binding for %q = %q, want %q", specifier, bindings[specifier], binding)
+		}
+	}
+}

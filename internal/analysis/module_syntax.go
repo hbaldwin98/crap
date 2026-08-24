@@ -209,3 +209,113 @@ func csharpUsingReference(node *treesitter.Node, source []byte, scope string) (s
 	}
 	return reference, true
 }
+
+// rustModulePath derives a `crate::`-rooted module path from a file path, using
+// the same conventions rustc applies: `src` is the crate source root, `lib.rs`
+// and `main.rs` are crate roots, and `mod.rs` names its directory.
+func rustModulePath(relative string) string {
+	cleaned := filepath.ToSlash(filepath.Clean(relative))
+	cleaned = strings.TrimSuffix(cleaned, filepath.Ext(cleaned))
+	segments := make([]string, 0, 4)
+	for _, segment := range strings.Split(cleaned, "/") {
+		if segment != "" && segment != "." {
+			segments = append(segments, segment)
+		}
+	}
+	if len(segments) > 0 && segments[0] == "src" {
+		segments = segments[1:]
+	}
+	if length := len(segments); length > 0 {
+		switch segments[length-1] {
+		case "mod", "lib", "main":
+			segments = segments[:length-1]
+		}
+	}
+	return strings.Join(append([]string{"crate"}, segments...), "::")
+}
+
+func rustModuleSyntax(ctx context.Context, root *treesitter.Node, source []byte, relative string) (structuralModuleSyntax, error) {
+	modulePath := rustModulePath(relative)
+	result := structuralModuleSyntax{
+		modules:    []structuralModule{{System: "rust-module", Name: modulePath, Evidence: "source-file-path"}},
+		references: make([]structuralReference, 0),
+	}
+	err := walkNamedContext(ctx, root, func(node *treesitter.Node) error {
+		switch node.Kind() {
+		case "mod_item":
+			if node.ChildByFieldName("body") != nil {
+				return nil
+			}
+			name := node.ChildByFieldName("name")
+			if name == nil {
+				return nil
+			}
+			reference := referenceLocation(name)
+			reference.Kind = "rust-mod"
+			reference.Specifier = modulePath + "::" + strings.TrimSpace(name.Utf8Text(source))
+			reference.Binding = strings.TrimSpace(name.Utf8Text(source))
+			result.references = append(result.references, reference)
+		case "use_declaration":
+			argument := node.ChildByFieldName("argument")
+			if argument == nil {
+				return nil
+			}
+			collectRustUseReferences(argument, source, "", &result)
+		}
+		return nil
+	})
+	return result, err
+}
+
+// collectRustUseReferences flattens one `use` declaration into a reference per
+// imported leaf, so grouped and nested lists report each specifier separately.
+func collectRustUseReferences(node *treesitter.Node, source []byte, prefix string, result *structuralModuleSyntax) {
+	switch node.Kind() {
+	case "scoped_use_list":
+		list := node.ChildByFieldName("list")
+		if list == nil {
+			return
+		}
+		collectRustUseReferences(list, source, rustJoinUsePath(prefix, nodeSource(node.ChildByFieldName("path"), source)), result)
+	case "use_list":
+		for index := uint(0); index < node.NamedChildCount(); index++ {
+			collectRustUseReferences(node.NamedChild(index), source, prefix, result)
+		}
+	case "use_as_clause":
+		path := node.ChildByFieldName("path")
+		if path == nil {
+			return
+		}
+		reference := rustUseReference(path, source, prefix)
+		reference.Binding = nodeSource(node.ChildByFieldName("alias"), source)
+		result.references = append(result.references, reference)
+	case "use_wildcard":
+		reference := rustUseReference(node, source, prefix)
+		reference.Specifier = strings.TrimSuffix(reference.Specifier, "::*")
+		reference.Kind, reference.Binding = "rust-use-glob", "*"
+		result.references = append(result.references, reference)
+	default:
+		result.references = append(result.references, rustUseReference(node, source, prefix))
+	}
+}
+
+func rustUseReference(node *treesitter.Node, source []byte, prefix string) structuralReference {
+	specifier := rustJoinUsePath(prefix, strings.TrimSpace(node.Utf8Text(source)))
+	reference := referenceLocation(node)
+	reference.Kind, reference.Specifier = "rust-use", specifier
+	if segments := strings.Split(specifier, "::"); len(segments) > 0 {
+		reference.Binding = segments[len(segments)-1]
+	}
+	return reference
+}
+
+func rustJoinUsePath(prefix, path string) string {
+	path = strings.Join(strings.Fields(path), "")
+	if prefix == "" {
+		return path
+	}
+	if path == "" {
+		return prefix
+	}
+	return prefix + "::" + path
+}
