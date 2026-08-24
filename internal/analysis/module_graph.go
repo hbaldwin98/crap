@@ -224,6 +224,8 @@ func codeGraphReferenceCandidates(raw structuralReference, sourcePath string, mo
 		return eligibleGoModules(moduleByName[raw.Specifier], modules), "outside-selected-sources"
 	case strings.HasPrefix(raw.Kind, "typescript-"):
 		return typeScriptModuleCandidates(raw.Specifier, sourcePath, moduleByName)
+	case strings.HasPrefix(raw.Kind, "rust-"):
+		return rustModuleCandidates(raw, sourcePath, moduleByName)
 	case strings.HasPrefix(raw.Kind, "csharp-"):
 		return csharpModuleCandidates(raw, moduleByName)
 	default:
@@ -268,6 +270,49 @@ func typeScriptModuleCandidates(specifier, sourcePath string, moduleByName map[s
 		result = append(result, moduleByName[filepath.ToSlash(candidate)]...)
 	}
 	return result, "outside-selected-sources"
+}
+
+// rustModuleCandidates resolves a crate-relative path to the longest module
+// prefix that names a selected source module, because a `use` path usually ends
+// in an item rather than a module.
+func rustModuleCandidates(raw structuralReference, sourcePath string, moduleByName map[string][]string) ([]string, string) {
+	specifier, reason := rustAbsoluteSpecifier(raw, sourcePath)
+	if reason != "" {
+		return nil, reason
+	}
+	segments := strings.Split(specifier, "::")
+	for length := len(segments); length > 0; length-- {
+		if candidates := moduleByName[strings.Join(segments[:length], "::")]; len(candidates) > 0 {
+			return candidates, ""
+		}
+	}
+	return nil, "outside-selected-sources"
+}
+
+// rustAbsoluteSpecifier rewrites `self::`, `super::`, and bare relative paths
+// against the module that declared them. External crate paths are not resolved.
+func rustAbsoluteSpecifier(raw structuralReference, sourcePath string) (string, string) {
+	if raw.Kind == "rust-mod" {
+		return raw.Specifier, ""
+	}
+	current := strings.Split(rustModulePath(sourcePath), "::")
+	segments := strings.Split(raw.Specifier, "::")
+	switch segments[0] {
+	case "crate":
+		return raw.Specifier, ""
+	case "self":
+		return strings.Join(append(current, segments[1:]...), "::"), ""
+	case "super":
+		for len(segments) > 0 && segments[0] == "super" {
+			if len(current) <= 1 {
+				return "", "path-escapes-crate-root"
+			}
+			current, segments = current[:len(current)-1], segments[1:]
+		}
+		return strings.Join(append(current, segments...), "::"), ""
+	default:
+		return "", "non-crate-specifier"
+	}
 }
 
 func csharpModuleCandidates(raw structuralReference, moduleByName map[string][]string) ([]string, string) {

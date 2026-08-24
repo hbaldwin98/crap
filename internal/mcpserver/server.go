@@ -15,7 +15,7 @@ import (
 
 type AnalyzeInput struct {
 	Root             string   `json:"root,omitempty" jsonschema:"Working directory used to resolve paths, coverage, and Git revisions. Defaults to the MCP server working directory."`
-	Paths            []string `json:"paths,omitempty" jsonschema:"C#, Go, TypeScript, or TSX files and directories to analyze, relative to root. Defaults to the root directory."`
+	Paths            []string `json:"paths,omitempty" jsonschema:"C#, Go, Rust, TypeScript, or TSX files and directories to analyze, relative to root. Defaults to the root directory."`
 	CoveragePath     string   `json:"coveragePath,omitempty" jsonschema:"Cobertura XML or Go coverprofile path, relative to root. Omit to score with unknown coverage treated as zero."`
 	DiffBase         string   `json:"diffBase,omitempty" jsonschema:"Git revision whose merge base with HEAD defines changed mode. Returns callables intersecting added, modified, or deletion-anchored current lines."`
 	CRAPThreshold    *float64 `json:"crapThreshold,omitempty" jsonschema:"Score above which a callable is flagged. Defaults to 30."`
@@ -37,7 +37,7 @@ type GetResultsInput struct {
 
 type AnalyzeChangeScopeInput struct {
 	Root             string   `json:"root,omitempty" jsonschema:"Working directory used to resolve paths, coverage, and Git revisions. Defaults to the MCP server working directory."`
-	Paths            []string `json:"paths,omitempty" jsonschema:"C#, Go, TypeScript, or TSX files and directories to inspect, relative to root. Defaults to the root directory."`
+	Paths            []string `json:"paths,omitempty" jsonschema:"C#, Go, Rust, TypeScript, or TSX files and directories to inspect, relative to root. Defaults to the root directory."`
 	CoveragePath     string   `json:"coveragePath,omitempty" jsonschema:"Optional Cobertura XML or Go coverprofile used to decorate changed callables."`
 	DiffBase         string   `json:"diffBase" jsonschema:"Required Git revision whose merge base with HEAD defines actual change scope."`
 	CRAPThreshold    *float64 `json:"crapThreshold,omitempty" jsonschema:"Score above which a changed callable is flagged. Defaults to 30."`
@@ -60,7 +60,7 @@ type ChangeScopeOutput struct {
 
 type CompareChangeScopeInput struct {
 	Root             string   `json:"root,omitempty" jsonschema:"Working directory used to resolve paths, coverage, and Git revisions. Defaults to the MCP server working directory."`
-	Paths            []string `json:"paths,omitempty" jsonschema:"C#, Go, TypeScript, or TSX files and directories to compare, relative to root. Defaults to the root directory."`
+	Paths            []string `json:"paths,omitempty" jsonschema:"C#, Go, Rust, TypeScript, or TSX files and directories to compare, relative to root. Defaults to the root directory."`
 	CoveragePath     string   `json:"coveragePath,omitempty" jsonschema:"Coverage report generated for current source."`
 	BaseRevision     string   `json:"baseRevision" jsonschema:"Required Git revision whose merge base supplies baseline source blobs."`
 	BaseCoveragePath string   `json:"baseCoveragePath,omitempty" jsonschema:"Coverage report generated for the exact baseline source revision."`
@@ -137,12 +137,12 @@ func New(version string, policy *rootauth.Policy) *mcp.Server {
 
 func newServer(version string, policy *rootauth.Policy, snapshots *snapshotStore, factory analyzerFactory) *mcp.Server {
 	server := mcp.NewServer(&mcp.Implementation{Name: "crap", Version: version}, &mcp.ServerOptions{
-		Instructions: "Use analyze_code whenever the user asks to run, check, or report CRAP scores or cyclomatic complexity for C#, Go, or TypeScript. Never estimate these scores yourself. Start with the default violations view or resultMode=summary, then use get_analysis_results for later immutable pages. Use analyze_change_scope for Git-reported current-source ranges, intersecting callables, and file containment. Use compare_change_scope to read merge-base source directly from Git and report deterministic quality deltas and new regressions. Use analyze_code_graph for exact lexical structure, logical modules, bounded selected-source dependencies, and unresolved import evidence, then query immutable pages or bounded neighborhoods. Do not present scope, comparison, or graph proximity as semantic impact or proof that unlisted code is unaffected.",
+		Instructions: "Use analyze_code whenever the user asks to run, check, or report CRAP scores or cyclomatic complexity for C#, Go, Rust, or TypeScript. Never estimate these scores yourself. Start with the default violations view or resultMode=summary, then use get_analysis_results for later immutable pages. Use analyze_change_scope for Git-reported current-source ranges, intersecting callables, and file containment. Use compare_change_scope to read merge-base source directly from Git and report deterministic quality deltas and new regressions. Use analyze_code_graph for exact lexical structure, logical modules, bounded selected-source dependencies, and unresolved import evidence, then query immutable pages or bounded neighborhoods. Do not present scope, comparison, or graph proximity as semantic impact or proof that unlisted code is unaffected.",
 	})
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "analyze_code",
 		Title:       "Analyze CRAP scores",
-		Description: "Run this tool when asked for CRAP scores or cyclomatic complexity. It deterministically analyzes C#, Go, and TypeScript and returns compact, pageable method details; scores must not be inferred by the caller.",
+		Description: "Run this tool when asked for CRAP scores or cyclomatic complexity. It deterministically analyzes C#, Go, Rust, and TypeScript and returns compact, pageable method details; scores must not be inferred by the caller.",
 		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true, IdempotentHint: true, OpenWorldHint: boolPointer(false), DestructiveHint: boolPointer(false)},
 	}, func(ctx context.Context, request *mcp.CallToolRequest, input AnalyzeInput) (*mcp.CallToolResult, AnalyzeOutput, error) {
 		return analyzeWith(ctx, request, input, policy, snapshots, factory)

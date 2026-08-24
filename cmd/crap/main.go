@@ -555,7 +555,7 @@ func writeUsage(writer io.Writer, flags *flag.FlagSet) {
 	fmt.Fprintln(writer, "       crap arch [options] [path ...]")
 	fmt.Fprintln(writer, "       crap calls [options] [path ...]")
 	fmt.Fprintln(writer, "       crap mcp")
-	fmt.Fprintln(writer, "Deterministically calculate cyclomatic complexity and CRAP scores for C#, Go, and TypeScript callables.")
+	fmt.Fprintln(writer, "Deterministically calculate cyclomatic complexity and CRAP scores for C#, Go, Rust, and TypeScript callables.")
 	flags.PrintDefaults()
 }
 

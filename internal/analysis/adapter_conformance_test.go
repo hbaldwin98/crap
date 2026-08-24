@@ -42,6 +42,15 @@ func TestLanguageAdapterConformance(t *testing.T) {
 			},
 		},
 		{
+			file: "callables.rs",
+			want: []expectedCallable{
+				{"Worker::outer", "function", 4, 15, 2},
+				{"Worker::handler", "closure", 5, 10, 3},
+				{"registry::register", "function", 19, 21, 1},
+				{"registry::<anonymous@20:30>", "closure", 20, 20, 2},
+			},
+		},
+		{
 			file: "callables.ts",
 			want: []expectedCallable{
 				{"Conformance.outer", "function", 2, 6, 2},
@@ -59,6 +68,12 @@ func TestLanguageAdapterConformance(t *testing.T) {
 			file: "branches.go",
 			want: []expectedCallable{
 				{"conformance.Count", "function", 3, 27, 10},
+			},
+		},
+		{
+			file: "branches.rs",
+			want: []expectedCallable{
+				{"count", "function", 1, 23, 11},
 			},
 		},
 		{
@@ -178,6 +193,24 @@ func TestAdapterNamesUseLanguageLevelIdentities(t *testing.T) {
 				"public static explicit operator int(Work value) => 1;\n" +
 				"}\n",
 			wantName: []string{"Work.this.get", "Work.this.get", "Work.operator +", "Work.explicit operator int"},
+		},
+		{
+			name: "Rust trait, impl, and module scopes", file: "work.rs",
+			source: `pub trait Store {
+    fn put(&self) -> bool { true }
+}
+pub struct Memory;
+impl Memory {
+    pub fn load(&self) {}
+}
+impl Store for Memory {
+    fn put(&self) -> bool { false }
+}
+mod inner {
+    pub fn helper() {}
+}
+`,
+			wantName: []string{"Store::put", "Memory::load", "<Memory as Store>::put", "inner::helper"},
 		},
 		{
 			name: "TypeScript module", file: "work.ts",

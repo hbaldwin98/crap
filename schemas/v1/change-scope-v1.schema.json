@@ -9,7 +9,7 @@
     "tool": { "$ref": "common.schema.json#/$defs/tool" },
     "fingerprints": { "$ref": "common.schema.json#/$defs/fingerprints" },
     "coordinates": { "$ref": "common.schema.json#/$defs/coordinates" },
-    "grammars": { "type": "array", "items": { "oneOf": [{ "const": {"language": "csharp", "version": "v0.23.5"} }, { "const": {"language": "go", "version": "v0.23.4"} }, { "const": {"language": "typescript", "version": "v0.23.2"} }, { "const": {"language": "tsx", "version": "v0.23.2"} }] } },
+    "grammars": { "type": "array", "items": { "oneOf": [{ "const": {"language": "csharp", "version": "v0.23.5"} }, { "const": {"language": "go", "version": "v0.23.4"} }, { "const": {"language": "typescript", "version": "v0.23.2"} }, { "const": {"language": "tsx", "version": "v0.23.2"} }, { "const": {"language": "rust", "version": "v0.24.0"} }] } },
     "mode": { "const": "actual" },
     "diffBase": { "type": "string", "minLength": 1 },
     "baseCommit": { "type": "string", "minLength": 1 },

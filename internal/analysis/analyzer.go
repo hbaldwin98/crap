@@ -68,13 +68,14 @@ type Analyzer struct {
 }
 
 func NewAnalyzer() (*Analyzer, error) {
-	languages := make(map[string]languageDefinition, 4)
+	languages := make(map[string]languageDefinition, 5)
 	definitions := []struct {
 		extension string
 		load      func() (languageDefinition, error)
 	}{
 		{".cs", newCSharpLanguage},
 		{".go", newGoLanguage},
+		{".rs", newRustLanguage},
 		{".ts", func() (languageDefinition, error) { return newTypeScriptLanguage(false) }},
 		{".tsx", func() (languageDefinition, error) { return newTypeScriptLanguage(true) }},
 	}
