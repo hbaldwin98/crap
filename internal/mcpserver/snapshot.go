@@ -71,6 +71,10 @@ func (store *snapshotStore) putCodeGraphContext(ctx context.Context, report anal
 	return store.putValueContext(ctx, "code-graph", report)
 }
 
+func (store *snapshotStore) putReviewContext(ctx context.Context, report analysis.ReviewReport) (*snapshot, error) {
+	return store.putValueContext(ctx, "review", report)
+}
+
 func (store *snapshotStore) putValueContext(ctx context.Context, kind string, value any) (*snapshot, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -183,6 +187,17 @@ func (store *snapshotStore) decodeCodeGraph(item *snapshot) (analysis.CodeGraphR
 	var report analysis.CodeGraphReport
 	if err := json.Unmarshal(item.data, &report); err != nil {
 		return analysis.CodeGraphReport{}, fmt.Errorf("decode code graph snapshot: %w", err)
+	}
+	return report, nil
+}
+
+func (store *snapshotStore) decodeReview(item *snapshot) (analysis.ReviewReport, error) {
+	if item.kind != "review" {
+		return analysis.ReviewReport{}, fmt.Errorf("snapshot is not a review report")
+	}
+	var report analysis.ReviewReport
+	if err := json.Unmarshal(item.data, &report); err != nil {
+		return analysis.ReviewReport{}, fmt.Errorf("decode review snapshot: %w", err)
 	}
 	return report, nil
 }

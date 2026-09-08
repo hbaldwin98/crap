@@ -52,6 +52,24 @@ type compareCLIOptions struct {
 	showHelp         bool
 }
 
+type reviewCLIOptions struct {
+	paths            []string
+	format           string
+	output           string
+	coverage         string
+	base             string
+	baseCoverage     string
+	rulesFile        string
+	threshold        float64
+	failOnRegression bool
+	includeTests     bool
+	includeGenerated bool
+	includeCallGraph bool
+	excludes         stringList
+	strictCoverage   bool
+	showHelp         bool
+}
+
 type graphCLIOptions struct {
 	paths            []string
 	format           string
@@ -93,6 +111,7 @@ var subcommands = map[string]func([]string, io.Writer, io.Writer) int{
 	"mcp":     runMCP,
 	"scope":   runScope,
 	"compare": runComparison,
+	"review":  runReview,
 	"graph":   runGraph,
 	"arch":    runArchitecture,
 	"calls":   runCalls,
@@ -349,6 +368,139 @@ func runComparison(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
+func runReview(args []string, stdout, stderr io.Writer) int {
+	options, ok := parseReviewOptions(args, stdout, stderr)
+	if !ok {
+		return 1
+	}
+	if options.showHelp {
+		return 0
+	}
+	if options.base == "" {
+		fmt.Fprintln(stderr, "crap: review requires --base")
+		return 1
+	}
+	if options.output != "" {
+		if err := clioutput.Validate(options.output); err != nil {
+			fmt.Fprintf(stderr, "crap: invalid output path: %v\n", err)
+			return 1
+		}
+	}
+	root, err := os.Getwd()
+	if err != nil {
+		fmt.Fprintf(stderr, "crap: determine working directory: %v\n", err)
+		return 1
+	}
+	rules := analysis.ArchitectureRules{}
+	if options.rulesFile != "" {
+		rules, ok = parseArchitectureRules(options.rulesFile, stderr)
+		if !ok {
+			return 1
+		}
+	}
+	analyzer, err := analysis.NewAnalyzer()
+	if err != nil {
+		fmt.Fprintf(stderr, "crap: %v\n", err)
+		return 1
+	}
+	defer analyzer.Close()
+	report, err := analyzer.AnalyzeReview(analysis.ReviewOptions{
+		BaseRevision: options.base, BaseCoveragePath: options.baseCoverage, ArchitectureRules: rules,
+		IncludeCallGraph: options.includeCallGraph,
+		Analysis: analysis.Options{
+			Root: root, Paths: options.paths, CoveragePath: options.coverage, CRAPThreshold: options.threshold,
+			IncludeTests: options.includeTests, IncludeGenerated: options.includeGenerated, Exclude: options.excludes,
+			StrictCoverage: options.strictCoverage,
+		},
+	})
+	if err != nil {
+		fmt.Fprintf(stderr, "crap: %v\n", err)
+		return 1
+	}
+	if err := clioutput.Write(stdout, options.output, func(writer io.Writer) error {
+		if options.format == "json" {
+			encoder := json.NewEncoder(writer)
+			encoder.SetIndent("", "  ")
+			return encoder.Encode(report)
+		}
+		return writeReviewText(writer, report)
+	}); err != nil {
+		fmt.Fprintf(stderr, "crap: write report: %v\n", err)
+		return 1
+	}
+	if options.failOnRegression && report.Summary.NewRegressions > 0 {
+		return 2
+	}
+	return 0
+}
+
+func parseReviewOptions(args []string, help, stderr io.Writer) (reviewCLIOptions, bool) {
+	flags := flag.NewFlagSet("crap review", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	options := reviewCLIOptions{}
+	flags.StringVar(&options.base, "base", "", "Git revision whose merge base supplies baseline source and changed ranges")
+	flags.StringVar(&options.baseCoverage, "base-coverage", "", "coverage report generated for baseline source")
+	flags.StringVar(&options.coverage, "coverage", "", "coverage report generated for current source")
+	flags.StringVar(&options.rulesFile, "rules", "", "path to a JSON file with architecture rules")
+	flags.StringVar(&options.format, "format", "text", "output format: text or json")
+	flags.StringVar(&options.output, "output", "", "write report with safe same-directory replacement")
+	flags.Float64Var(&options.threshold, "threshold", 30, "CRAP score threshold")
+	flags.BoolVar(&options.failOnRegression, "fail-on-regression", false, "exit 2 for new quality regressions")
+	flags.BoolVar(&options.includeTests, "include-tests", false, "include Go and TypeScript test files")
+	flags.BoolVar(&options.includeGenerated, "include-generated", false, "include generated source files")
+	flags.BoolVar(&options.includeCallGraph, "call-graph", false, "include Go compiler-backed affected-test evidence")
+	flags.Var(&options.excludes, "exclude", "exclude a root-relative path pattern (repeatable)")
+	flags.BoolVar(&options.strictCoverage, "strict-coverage", false, "fail when either coverage report has unmatched or ambiguous paths")
+	flags.BoolVar(&options.showHelp, "h", false, "print help")
+	flags.BoolVar(&options.showHelp, "help", false, "print help")
+	writeReviewUsage := func(writer io.Writer) {
+		flags.SetOutput(writer)
+		fmt.Fprintln(writer, "Usage: crap review --base REVISION [options] [path ...]")
+		fmt.Fprintln(writer, "Join deterministic change, quality, architecture, and optional test-impact evidence.")
+		flags.PrintDefaults()
+		flags.SetOutput(stderr)
+	}
+	flags.Usage = func() { writeReviewUsage(stderr) }
+	if err := flags.Parse(args); err != nil {
+		return reviewCLIOptions{}, false
+	}
+	options.paths = flags.Args()
+	if options.showHelp {
+		writeReviewUsage(help)
+		return options, true
+	}
+	if options.format != "text" && options.format != "json" {
+		fmt.Fprintf(stderr, "crap: review does not support format %q\n", options.format)
+		return reviewCLIOptions{}, false
+	}
+	if math.IsNaN(options.threshold) || math.IsInf(options.threshold, 0) || options.threshold < 0 {
+		fmt.Fprintln(stderr, "crap: threshold must be a finite non-negative number")
+		return reviewCLIOptions{}, false
+	}
+	return options, true
+}
+
+func writeReviewText(writer io.Writer, report analysis.ReviewReport) error {
+	if _, err := fmt.Fprintf(writer, "%d changed callables in %d changed files; %d new regressions, %d quality findings, %d affected tests, %d architecture violations\n", report.Summary.ChangedCallables, report.Summary.ChangedFiles, report.Summary.NewRegressions, report.Summary.QualityFindings, report.Summary.AffectedTests, report.Summary.ArchitectureViolations); err != nil {
+		return err
+	}
+	for _, finding := range report.Findings {
+		location := ""
+		if finding.Evidence.File != "" {
+			location = fmt.Sprintf(" (%s:%d)", filepath.ToSlash(finding.Evidence.File), finding.Evidence.StartLine)
+		}
+		if _, err := fmt.Fprintf(writer, "[%s] %s%s\n", strings.ToUpper(finding.Kind), finding.Title, location); err != nil {
+			return err
+		}
+	}
+	for _, limitation := range report.Limitations {
+		if _, err := fmt.Fprintf(writer, "limitation: %s\n", limitation); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func parseCompareOptions(args []string, help, stderr io.Writer) (compareCLIOptions, bool) {
 	flags := flag.NewFlagSet("crap compare", flag.ContinueOnError)
 	flags.SetOutput(stderr)
@@ -551,6 +703,7 @@ func writeUsage(writer io.Writer, flags *flag.FlagSet) {
 	fmt.Fprintln(writer, "Usage: crap [options] [path ...]")
 	fmt.Fprintln(writer, "       crap scope actual --diff-base REVISION [options] [path ...]")
 	fmt.Fprintln(writer, "       crap compare --base REVISION [options] [path ...]")
+	fmt.Fprintln(writer, "       crap review --base REVISION [options] [path ...]")
 	fmt.Fprintln(writer, "       crap graph [options] [path ...]")
 	fmt.Fprintln(writer, "       crap arch [options] [path ...]")
 	fmt.Fprintln(writer, "       crap calls [options] [path ...]")

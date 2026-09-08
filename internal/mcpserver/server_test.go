@@ -56,8 +56,8 @@ func TestAnalyzeCodeToolReturnsStructuredReport(t *testing.T) {
 	for _, tool := range tools.Tools {
 		toolNames[tool.Name] = true
 	}
-	if len(tools.Tools) != 9 || !toolNames["analyze_code"] || !toolNames["get_analysis_results"] || !toolNames["analyze_change_scope"] || !toolNames["get_change_scope"] || !toolNames["compare_change_scope"] || !toolNames["get_change_scope_comparison"] || !toolNames["analyze_code_graph"] || !toolNames["get_code_graph"] || !toolNames["get_code_graph_neighborhood"] {
-		t.Fatalf("tools = %#v, want analysis, scope, comparison, and graph tools", toolNames)
+	if len(tools.Tools) != 11 || !toolNames["analyze_code"] || !toolNames["get_analysis_results"] || !toolNames["analyze_change_scope"] || !toolNames["get_change_scope"] || !toolNames["compare_change_scope"] || !toolNames["get_change_scope_comparison"] || !toolNames["analyze_code_graph"] || !toolNames["get_code_graph"] || !toolNames["get_code_graph_neighborhood"] || !toolNames["review_change"] || !toolNames["get_review_change"] {
+		t.Fatalf("tools = %#v, want analysis, scope, comparison, graph, and review tools", toolNames)
 	}
 	result, err := clientSession.CallTool(ctx, &mcp.CallToolParams{
 		Name: "analyze_code",
@@ -124,6 +124,7 @@ type fakeAnalyzer struct {
 	scopeReport      analysis.ChangeScopeReport
 	comparisonReport analysis.ChangeScopeComparisonReport
 	graphReport      analysis.CodeGraphReport
+	reviewReport     analysis.ReviewReport
 }
 
 func (analyzer *fakeAnalyzer) AnalyzeContext(ctx context.Context, _ analysis.Options) (analysis.Report, error) {
@@ -156,6 +157,14 @@ func (analyzer *fakeAnalyzer) AnalyzeCodeGraphContext(ctx context.Context, _ ana
 		return analysis.CodeGraphReport{}, err
 	}
 	return analyzer.graphReport, nil
+}
+
+func (analyzer *fakeAnalyzer) AnalyzeReviewContext(ctx context.Context, _ analysis.ReviewOptions) (analysis.ReviewReport, error) {
+	analyzer.calls.Add(1)
+	if err := ctx.Err(); err != nil {
+		return analysis.ReviewReport{}, err
+	}
+	return analyzer.reviewReport, nil
 }
 
 func (*fakeAnalyzer) Close() {}
@@ -346,6 +355,58 @@ func TestComparisonMCPRequiresInputs(t *testing.T) {
 		t.Fatal("missing base revision was accepted")
 	}
 	if _, err := getChangeScopeComparison(context.Background(), store, GetChangeScopeComparisonInput{}); err == nil {
+		t.Fatal("missing report ID was accepted")
+	}
+}
+
+func TestReviewSnapshotRunsOnceAndIsImmutable(t *testing.T) {
+	root := t.TempDir()
+	policy, err := rootauth.New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	calls := &atomic.Int32{}
+	report := analysis.ReviewReport{
+		SchemaVersion: "1", ReportType: "review", BaseRevision: "main",
+		Findings:    []analysis.ReviewFinding{{ID: "finding", Kind: "regression", Priority: 10}},
+		Limitations: []string{"structural evidence"},
+	}
+	store := newSnapshotStore()
+	factory := func() (analyzerExecution, error) {
+		return &fakeAnalyzer{calls: calls, reviewReport: report}, nil
+	}
+	_, first, err := reviewChangeWith(context.Background(), nil, ReviewChangeInput{Root: root, BaseRevision: "main"}, policy, store, factory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if calls.Load() != 1 || first.ReportID == "" || first.PageSchemaVersion != "1" || len(first.Report.Findings) != 1 {
+		t.Fatalf("output = %#v, calls = %d", first, calls.Load())
+	}
+	report.Findings[0].Kind = "mutated"
+	second, err := getReviewChange(context.Background(), store, GetReviewChangeInput{ReportID: first.ReportID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if calls.Load() != 1 || second.Report.Findings[0].Kind != "regression" || second.ReportID != first.ReportID {
+		t.Fatalf("retrieved = %#v, calls = %d", second, calls.Load())
+	}
+	if _, err := getAnalysisResults(context.Background(), store, GetResultsInput{ReportID: first.ReportID}); err == nil {
+		t.Fatal("review snapshot was accepted as analysis")
+	}
+}
+
+func TestReviewMCPRequiresInputs(t *testing.T) {
+	root := t.TempDir()
+	policy, err := rootauth.New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := newSnapshotStore()
+	factory := func() (analyzerExecution, error) { return &fakeAnalyzer{calls: &atomic.Int32{}}, nil }
+	if _, _, err := reviewChangeWith(context.Background(), nil, ReviewChangeInput{Root: root}, policy, store, factory); err == nil {
+		t.Fatal("missing base revision was accepted")
+	}
+	if _, err := getReviewChange(context.Background(), store, GetReviewChangeInput{}); err == nil {
 		t.Fatal("missing report ID was accepted")
 	}
 }

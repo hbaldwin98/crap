@@ -82,6 +82,32 @@ type ChangeScopeComparisonOutput struct {
 	Report            analysis.ChangeScopeComparisonReport `json:"report"`
 }
 
+type ReviewChangeInput struct {
+	Root             string                     `json:"root,omitempty" jsonschema:"Working directory used to resolve paths, coverage, and Git revisions. Defaults to the MCP server working directory."`
+	Paths            []string                   `json:"paths,omitempty" jsonschema:"C#, Go, Rust, TypeScript, or TSX files to review, relative to root. Defaults to the root directory."`
+	CoveragePath     string                     `json:"coveragePath,omitempty" jsonschema:"Coverage report generated for current source."`
+	BaseRevision     string                     `json:"baseRevision" jsonschema:"Required Git revision whose merge base supplies baseline source blobs and actual changed ranges."`
+	BaseCoveragePath string                     `json:"baseCoveragePath,omitempty" jsonschema:"Coverage report generated for the exact baseline source revision."`
+	CRAPThreshold    *float64                   `json:"crapThreshold,omitempty" jsonschema:"Score above which a changed callable is flagged. Defaults to 30."`
+	IncludeTests     bool                       `json:"includeTests,omitempty" jsonschema:"Include Go _test.go and TypeScript .spec/.test files."`
+	IncludeGenerated bool                       `json:"includeGenerated,omitempty" jsonschema:"Include generated source conventions."`
+	Exclude          []string                   `json:"exclude,omitempty" jsonschema:"Root-relative source exclusion patterns using gitignore syntax."`
+	StrictCoverage   bool                       `json:"strictCoverage,omitempty" jsonschema:"Fail when either coverage report has unmatched or ambiguous paths."`
+	Rules            analysis.ArchitectureRules `json:"rules,omitempty" jsonschema:"Architecture rules evaluated against the selected-source dependency graph."`
+	IncludeCallGraph bool                       `json:"includeCallGraph,omitempty" jsonschema:"Include Go compiler-backed affected-test evidence. Requires a go.mod."`
+}
+
+type GetReviewChangeInput struct {
+	ReportID string `json:"reportId" jsonschema:"Review report ID returned by review_change."`
+}
+
+type ReviewOutput struct {
+	PageSchemaVersion string                `json:"pageSchemaVersion"`
+	ReportID          string                `json:"reportId"`
+	ExpiresAt         string                `json:"expiresAt"`
+	Report            analysis.ReviewReport `json:"report"`
+}
+
 type AnalyzeOutput struct {
 	PageSchemaVersion string                      `json:"pageSchemaVersion"`
 	ReportType        string                      `json:"reportType"`
@@ -122,6 +148,7 @@ type analyzerExecution interface {
 	AnalyzeChangeScopeContext(context.Context, analysis.Options) (analysis.ChangeScopeReport, error)
 	CompareChangeScopeContext(context.Context, analysis.ComparisonOptions) (analysis.ChangeScopeComparisonReport, error)
 	AnalyzeCodeGraphContext(context.Context, analysis.CodeGraphOptions) (analysis.CodeGraphReport, error)
+	AnalyzeReviewContext(context.Context, analysis.ReviewOptions) (analysis.ReviewReport, error)
 	Close()
 }
 
@@ -137,7 +164,7 @@ func New(version string, policy *rootauth.Policy) *mcp.Server {
 
 func newServer(version string, policy *rootauth.Policy, snapshots *snapshotStore, factory analyzerFactory) *mcp.Server {
 	server := mcp.NewServer(&mcp.Implementation{Name: "crap", Version: version}, &mcp.ServerOptions{
-		Instructions: "Use analyze_code whenever the user asks to run, check, or report CRAP scores or cyclomatic complexity for C#, Go, Rust, or TypeScript. Never estimate these scores yourself. Start with the default violations view or resultMode=summary, then use get_analysis_results for later immutable pages. Use analyze_change_scope for Git-reported current-source ranges, intersecting callables, and file containment. Use compare_change_scope to read merge-base source directly from Git and report deterministic quality deltas and new regressions. Use analyze_code_graph for exact lexical structure, logical modules, bounded selected-source dependencies, and unresolved import evidence, then query immutable pages or bounded neighborhoods. Do not present scope, comparison, or graph proximity as semantic impact or proof that unlisted code is unaffected.",
+		Instructions: "Use analyze_code whenever the user asks to run, check, or report CRAP scores or cyclomatic complexity for C#, Go, Rust, or TypeScript. Never estimate these scores yourself. Start with the default violations view or resultMode=summary, then use get_analysis_results for later immutable pages. Use review_change for one deterministic change review joining changed callables, baseline regressions, coverage, architecture evidence, and optional Go affected-test evidence; use get_review_change for the retained immutable report. Use analyze_change_scope for Git-reported current-source ranges, intersecting callables, and file containment. Use compare_change_scope to read merge-base source directly from Git and report deterministic quality deltas and new regressions. Use analyze_code_graph for exact lexical structure, logical modules, bounded selected-source dependencies, and unresolved import evidence, then query immutable pages or bounded neighborhoods. Do not present scope, comparison, graph proximity, architecture evidence, or affected tests as semantic impact or proof that unlisted code is unaffected.",
 	})
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "analyze_code",
@@ -185,8 +212,95 @@ func newServer(version string, policy *rootauth.Policy, snapshots *snapshotStore
 		output, err := getChangeScopeComparison(ctx, snapshots, input)
 		return nil, output, err
 	})
+	mcp.AddTool(server, &mcp.Tool{
+		Name: "review_change", Title: "Review change",
+		Description: "Join deterministic changed-callable, baseline regression, coverage, architecture, and optional Go affected-test evidence into one ranked review. It does not claim semantic or behavioral impact.",
+		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true, IdempotentHint: true, OpenWorldHint: boolPointer(false), DestructiveHint: boolPointer(false)},
+	}, func(ctx context.Context, request *mcp.CallToolRequest, input ReviewChangeInput) (*mcp.CallToolResult, ReviewOutput, error) {
+		return reviewChangeWith(ctx, request, input, policy, snapshots, factory)
+	})
+	mcp.AddTool(server, &mcp.Tool{
+		Name: "get_review_change", Title: "Get change review",
+		Description: "Read a retained immutable change review without rerunning Git or source analysis.",
+		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true, IdempotentHint: true, OpenWorldHint: boolPointer(false), DestructiveHint: boolPointer(false)},
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, input GetReviewChangeInput) (*mcp.CallToolResult, ReviewOutput, error) {
+		output, err := getReviewChange(ctx, snapshots, input)
+		return nil, output, err
+	})
 	registerCodeGraphTools(server, policy, snapshots, factory)
 	return server
+}
+
+func reviewChangeWith(ctx context.Context, _ *mcp.CallToolRequest, input ReviewChangeInput, policy *rootauth.Policy, snapshots *snapshotStore, factory analyzerFactory) (*mcp.CallToolResult, ReviewOutput, error) {
+	if input.BaseRevision == "" {
+		return nil, ReviewOutput{}, fmt.Errorf("baseRevision is required")
+	}
+	root, err := analysisRoot(input.Root)
+	if err != nil {
+		return nil, ReviewOutput{}, err
+	}
+	scope, err := policy.Root(root)
+	if err != nil {
+		return nil, ReviewOutput{}, err
+	}
+	threshold, err := analysisThreshold(input.CRAPThreshold)
+	if err != nil {
+		return nil, ReviewOutput{}, err
+	}
+	analyzer, err := factory()
+	if err != nil {
+		return nil, ReviewOutput{}, err
+	}
+	defer analyzer.Close()
+	report, err := analyzer.AnalyzeReviewContext(ctx, analysis.ReviewOptions{
+		BaseRevision: input.BaseRevision, BaseCoveragePath: input.BaseCoveragePath, ArchitectureRules: input.Rules,
+		IncludeCallGraph: input.IncludeCallGraph,
+		Analysis: analysis.Options{
+			Root: scope.Path(), Paths: input.Paths, CoveragePath: input.CoveragePath, CRAPThreshold: threshold,
+			IncludeTests: input.IncludeTests, IncludeGenerated: input.IncludeGenerated, Exclude: input.Exclude,
+			StrictCoverage: input.StrictCoverage, Authorization: scope,
+		},
+	})
+	if err != nil {
+		return nil, ReviewOutput{}, err
+	}
+	item, err := snapshots.putReviewContext(ctx, report)
+	if err != nil {
+		return nil, ReviewOutput{}, err
+	}
+	return nil, decorateReview(report, item), nil
+}
+
+func getReviewChange(ctx context.Context, snapshots *snapshotStore, input GetReviewChangeInput) (ReviewOutput, error) {
+	if input.ReportID == "" {
+		return ReviewOutput{}, fmt.Errorf("reportId is required")
+	}
+	item, err := snapshots.get(input.ReportID)
+	if err != nil {
+		return ReviewOutput{}, err
+	}
+	select {
+	case snapshots.reads <- struct{}{}:
+		defer func() { <-snapshots.reads }()
+	case <-ctx.Done():
+		return ReviewOutput{}, ctx.Err()
+	}
+	report, err := snapshots.decodeReview(item)
+	if err != nil {
+		return ReviewOutput{}, err
+	}
+	item, err = snapshots.get(input.ReportID)
+	if err != nil {
+		return ReviewOutput{}, err
+	}
+	if err := ctx.Err(); err != nil {
+		return ReviewOutput{}, err
+	}
+	return decorateReview(report, item), nil
+}
+
+func decorateReview(report analysis.ReviewReport, item *snapshot) ReviewOutput {
+	return ReviewOutput{PageSchemaVersion: "1", ReportID: item.id, ExpiresAt: item.expiresAt.UTC().Format(time.RFC3339), Report: report}
 }
 
 func compareChangeScopeWith(ctx context.Context, _ *mcp.CallToolRequest, input CompareChangeScopeInput, policy *rootauth.Policy, snapshots *snapshotStore, factory analyzerFactory) (*mcp.CallToolResult, ChangeScopeComparisonOutput, error) {

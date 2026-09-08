@@ -272,6 +272,18 @@ Matching first uses the stable callable ID. Remaining callables match only when 
 
 `--fail-on-regression` exits `2` only when a current callable is newly above threshold: either it was added above threshold or a matched callable crossed from passing to failing with comparable coverage evidence. Existing above-threshold debt and removed callables do not fail the gate. Ambiguous groups make `summary.complete` false but are not silently classified as regressions. The complete report is written before exit `2`. Comparison supports `text` and `json`; text omits unchanged rows while JSON retains all evidence.
 
+### Unified Review
+
+Run one deterministic review that joins changed-code scope, baseline quality comparison, current graph quality, architecture rules, and optional Go affected-test evidence:
+
+```sh
+crap review --base origin/main --coverage coverage.out --base-coverage base-coverage.out --format json .
+```
+
+The `review` command requires `--base`. It accepts the same source-selection, threshold, coverage, exclusion, generated-source, test, and strict-coverage options as the other analysis commands. `--rules` evaluates architecture rules, and `--call-graph` adds compiler-backed affected-test evidence for a Go module. `--fail-on-regression` exits `2` when the review contains a new CRAP regression.
+
+The `review` v1 report contains changed files and callables, current coverage and graph summaries, new regressions, architecture cycles and violations, optional affected tests, ranked findings, diagnostics, and limitations. Findings are ordered by new regressions, CRAP threshold findings, low or unknown coverage, affected-test candidates, and architecture evidence. Findings are evidence for review, not claims about runtime behavior or semantic impact. The report is incomplete when its underlying comparison, architecture, scope, or optional call-graph evidence is incomplete or truncated.
+
 ### Code Graph
 
 Build a deterministic module dependency graph and language-neutral declaration inventory:
@@ -397,6 +409,8 @@ The analysis CLI emits analysis report schema v6. The current MCP envelope uses 
 `analyze_change_scope` accepts the same root, path, coverage, threshold, and discovery inputs, but requires `diffBase`. It returns the complete `change-scope` v1 report inside a `pageSchemaVersion: "1"` envelope with `reportId` and `expiresAt`. Pass that ID to `get_change_scope` to retrieve the immutable report without rerunning Git or rereading source. Scope snapshots share the analysis server's bounded storage and expiration policy. These tools report structural change evidence only; callers must not present containment as semantic impact.
 
 `compare_change_scope` accepts the same source-selection inputs, requires `baseRevision`, and accepts independent `coveragePath` and `baseCoveragePath` artifacts. It reads merge-base source directly from Git, returns the complete comparison v1 report, and stores an immutable typed snapshot. Pass its ID to `get_change_scope_comparison`; retrieval does not reread Git, source, or coverage. Comparison snapshot IDs cannot be used with analysis or scope retrieval tools.
+
+`review_change` accepts `baseRevision`, current and optional baseline coverage paths, source-selection options, architecture `rules`, and optional `includeCallGraph`. It returns an immutable `review` v1 report joining changed-callable, regression, coverage, architecture, and optional Go affected-test evidence. Use `get_review_change` with the returned `reportId` to retrieve the same report without rerunning analysis. Review snapshots use `pageSchemaVersion: "1"` and the same bounded retention and expiry policy as other analysis snapshots. The report preserves structural and static limitations; callers must not present findings as semantic impact.
 
 `analyze_code_graph` accepts source-selection, coverage, and threshold inputs, builds one complete structural and module-dependency graph, stores it as an immutable typed snapshot, and returns `summary`, `nodes`, `edges`, or `references` detail. `get_code_graph` pages the same snapshot with a signed cursor; it never rereads source. References preserve unresolved and ambiguous import evidence instead of guessing. Pages contain at most 100 records. MCP retention still has a separate 16 MiB serialized-report limit, 30-minute default expiry, eight-entry limit, and 64 MiB total bound.
 
@@ -564,7 +578,7 @@ Both MCP servers publish initialization instructions that tell capable clients w
 
 ## Report Contracts
 
-JSON outputs carry `reportType`, `schemaVersion`, one shared tool version, coordinate semantics, and deterministic fingerprints. Analysis is v6, actual change scope is v1, change-scope comparison is v1, code graph and code-graph neighborhoods are v1, architecture reports and rules inputs are v1, Go call graphs are v1, mutation is v3, mutation plans are v2, and mutation doctor output has its independent v1 contract. Incompatible changes increment the contract that changed; MCP envelope versions are independent from their underlying report versions. Analysis v5 added Go function literals and C# lambdas, anonymous methods, and expression-bodied properties/indexers. Analysis v6 adds deterministic source-discovery policy and metadata.
+JSON outputs carry `reportType`, `schemaVersion`, one shared tool version, coordinate semantics, and deterministic fingerprints. Analysis is v6, actual change scope is v1, change-scope comparison is v1, unified review is v1, code graph and code-graph neighborhoods are v1, architecture reports and rules inputs are v1, Go call graphs are v1, mutation is v3, mutation plans are v2, and mutation doctor output has its independent v1 contract. Incompatible changes increment the contract that changed; MCP envelope versions are independent from their underlying report versions. Analysis v5 added Go function literals and C# lambdas, anonymous methods, and expression-bodied properties/indexers. Analysis v6 adds deterministic source-discovery policy and metadata.
 
 Normalized analysis coordinates are 1-based UTF-8 byte columns with exclusive ends. Normalized mutation coordinates remain engine-native. SARIF is a separate presentation contract and converts or validates both forms as 1-based UTF-16 code units for GitHub. Analysis callable names, signatures, and ranges come from the language AST. Callable IDs hash language, normalized file path, kind, lexical signature, and same-signature occurrence, so inserting blank lines above a callable does not change its ID. Mutation wrapper IDs hash normalized file, range, mutator, and replacement; Stryker's `nativeId` and status do not affect them.
 
@@ -580,9 +594,9 @@ Change intelligence will grow from deterministic evidence rather than inferred i
 2. Completed: lexical language-neutral file, type-declaration, and callable inventory.
 3. Completed: bounded selected-source module dependency graph with explicit unresolved references.
 4. Completed: AI-consumable `crap graph` JSON and text structural contract.
- 5. Completed: architecture rules and cycle proofs.
- 6. Completed: compiler-backed call relationships and affected-test traversal for Go modules.
- 7. Next: unified change oracle joining scope, quality, tests, and architecture evidence.
+5. Completed: architecture rules and cycle proofs.
+6. Completed: compiler-backed call relationships and affected-test traversal for Go modules.
+7. Completed: unified review joining scope, quality, tests, and architecture evidence.
 
 Each phase must keep engine facts, unresolved edges, and AI or user judgment distinct.
 
@@ -628,6 +642,7 @@ go build ./...
 go test -coverpkg=./... -coverprofile=coverage.out ./...
 go run ./cmd/crap --coverage coverage.out --threshold 30 --fail-on-threshold .
 go run ./cmd/crap compare --base HEAD^ --threshold 30 --fail-on-regression .
+go run ./cmd/crap review --base HEAD^ --threshold 30 --fail-on-regression .
 ```
 
 CI generates coverage for both the current source and a temporary archive of merge-base source, then fails only for new CRAP regressions above `30`.

@@ -94,6 +94,18 @@ func TestGeneratedAnalysisAndPlanValidate(t *testing.T) {
 		ExpiresAt:         time.Date(2026, time.August, 21, 12, 0, 0, 0, time.UTC).Format(time.RFC3339),
 		Report:            comparison,
 	})
+	expiresAt := time.Date(2026, time.August, 21, 12, 0, 0, 0, time.UTC).Format(time.RFC3339)
+	review, err := analyzer.AnalyzeReview(analysis.ReviewOptions{
+		BaseRevision: "HEAD",
+		Analysis:     analysis.Options{Root: project, Paths: []string{"work.go"}, CRAPThreshold: 30},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	validateValue(t, filepath.Join(root, "schemas", "v1", "review-v1.schema.json"), review)
+	validateValue(t, filepath.Join(root, "schemas", "v1", "review-mcp-v1.schema.json"), mcpserver.ReviewOutput{
+		PageSchemaVersion: "1", ReportID: strings.Repeat("4", 32), ExpiresAt: expiresAt, Report: review,
+	})
 	graph, err := analyzer.AnalyzeCodeGraph(analysis.CodeGraphOptions{Root: project, Paths: []string{"work.go"}, CRAPThreshold: 30})
 	if err != nil {
 		t.Fatal(err)
@@ -104,7 +116,6 @@ func TestGeneratedAnalysisAndPlanValidate(t *testing.T) {
 		t.Fatal(err)
 	}
 	validateValue(t, filepath.Join(root, "schemas", "v1", "architecture-v1.schema.json"), architecture)
-	expiresAt := time.Date(2026, time.August, 21, 12, 0, 0, 0, time.UTC).Format(time.RFC3339)
 	validateValue(t, filepath.Join(root, "schemas", "v1", "code-graph-mcp-page-v1.schema.json"), mcpserver.CodeGraphOutput{
 		PageSchemaVersion: "1", ReportType: "code-graph-page", ReportID: strings.Repeat("3", 32), ExpiresAt: expiresAt,
 		SchemaVersion: graph.SchemaVersion, Tool: graph.Tool, Fingerprints: graph.Fingerprints, Coordinates: graph.Coordinates,

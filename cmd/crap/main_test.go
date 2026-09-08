@@ -34,7 +34,7 @@ func TestRunVersion(t *testing.T) {
 }
 
 func TestRunHelpExitsZero(t *testing.T) {
-	for _, args := range [][]string{{"-h"}, {"--help"}, {"scope", "actual", "--help"}, {"compare", "--help"}, {"graph", "--help"}, {"mcp", "--help"}} {
+	for _, args := range [][]string{{"-h"}, {"--help"}, {"scope", "actual", "--help"}, {"compare", "--help"}, {"review", "--help"}, {"graph", "--help"}, {"mcp", "--help"}} {
 		var stdout, stderr bytes.Buffer
 		if code := run(args, &stdout, &stderr); code != 0 {
 			t.Errorf("run(%v) exit code = %d, stderr = %s", args, code, stderr.String())
@@ -148,6 +148,72 @@ func Work(v int) int {
 	}
 	if report.ReportType != "change-scope-comparison" || report.Summary.NewRegressions != 1 || len(report.Callables) != 1 || report.Callables[0].Reasons[len(report.Callables[0].Reasons)-1] != "threshold-crossed" {
 		t.Fatalf("report = %#v", report)
+	}
+}
+
+func TestRunReviewJSONAndRegressionExit(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "sample.go")
+	if err := os.WriteFile(source, []byte("package sample\n\nfunc Work(v int) int { return v }\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGitCLI(t, root, "init")
+	runGitCLI(t, root, "add", ".")
+	runGitCLI(t, root, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "baseline")
+	current := `package sample
+
+func Work(v int) int {
+	if v > 0 { v++ }
+	if v > 1 { v++ }
+	if v > 2 { v++ }
+	if v > 3 { v++ }
+	if v > 4 { v++ }
+	return v
+}
+`
+	if err := os.WriteFile(source, []byte(current), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	workingDirectory, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(root); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(workingDirectory) })
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"review", "--base", "HEAD", "--format", "json", "--fail-on-regression", "."}, &stdout, &stderr)
+	if code != 2 {
+		t.Fatalf("exit code = %d, stderr = %s", code, stderr.String())
+	}
+	var report analysis.ReviewReport
+	if err := json.Unmarshal(stdout.Bytes(), &report); err != nil {
+		t.Fatal(err)
+	}
+	if report.ReportType != "review" || report.Summary.NewRegressions != 1 || len(report.Findings) == 0 || report.Findings[0].Kind != "regression" {
+		t.Fatalf("report = %#v", report)
+	}
+}
+
+func TestWriteReviewTextShowsRankedFindingsAndLimitations(t *testing.T) {
+	report := analysis.ReviewReport{
+		Summary: analysis.ReviewSummary{ChangedFiles: 1, ChangedCallables: 2, NewRegressions: 1, QualityFindings: 1, AffectedTests: 1, ArchitectureViolations: 1},
+		Findings: []analysis.ReviewFinding{
+			{Kind: "regression", Title: "new quality regression", Evidence: analysis.ReviewFindingEvidence{File: "src/work.go", StartLine: 4}},
+			{Kind: "architecture", Title: "architecture rule violation in selected source"},
+		},
+		Limitations: []string{"structural evidence only"},
+	}
+	var output bytes.Buffer
+	if err := writeReviewText(&output, report); err != nil {
+		t.Fatal(err)
+	}
+	text := output.String()
+	for _, expected := range []string{"2 changed callables in 1 changed files; 1 new regressions", "[REGRESSION] new quality regression (src/work.go:4)", "[ARCHITECTURE] architecture rule violation", "limitation: structural evidence only"} {
+		if !strings.Contains(text, expected) {
+			t.Fatalf("output %q does not contain %q", text, expected)
+		}
 	}
 }
 
