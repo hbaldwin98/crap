@@ -302,6 +302,7 @@ func finalizeAnalysisReport(ctx context.Context, report *Report, fileCount int) 
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	appendCoverageDiagnostics(report)
 	report.Summary = summarize(report.Methods)
 	report.Summary.Files = fileCount
 	sort.Slice(report.Diagnostics, func(i, j int) bool {
@@ -311,6 +312,43 @@ func finalizeAnalysisReport(ctx context.Context, report *Report, fileCount int) 
 		return report.Diagnostics[i].Path < report.Diagnostics[j].Path
 	})
 	return ctx.Err()
+}
+
+func appendCoverageDiagnostics(report *Report) {
+	if report.Coverage.Format == "none" {
+		report.Diagnostics = append(report.Diagnostics, Diagnostic{
+			Severity: "warning",
+			Code:     "coverage-not-provided",
+			Message:  "no coverage report was provided; callable coverage is unknown and CRAP scoring uses zero coverage",
+		})
+		return
+	}
+
+	pathDiagnostics := make(map[string]bool)
+	for _, diagnostic := range report.Diagnostics {
+		if diagnostic.Code == "coverage-path-unmatched" || diagnostic.Code == "coverage-path-ambiguous" {
+			pathDiagnostics[diagnostic.Path] = true
+		}
+	}
+	unknownFiles := make(map[string]bool)
+	for _, method := range report.Methods {
+		if method.CoveragePercent == nil && method.File != "" && !pathDiagnostics[method.File] {
+			unknownFiles[method.File] = true
+		}
+	}
+	files := make([]string, 0, len(unknownFiles))
+	for file := range unknownFiles {
+		files = append(files, file)
+	}
+	sort.Strings(files)
+	for _, file := range files {
+		report.Diagnostics = append(report.Diagnostics, Diagnostic{
+			Severity: "warning",
+			Code:     "coverage-callable-unknown",
+			Message:  "one or more callables in this file have unknown coverage; CRAP scoring uses zero coverage for them",
+			Path:     file,
+		})
+	}
 }
 
 type fileAnalysis struct {

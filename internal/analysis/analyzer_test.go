@@ -377,6 +377,83 @@ func TestAnalyzerAppliesCoberturaToTypeScript(t *testing.T) {
 	}
 }
 
+func TestAnalyzerWarnsWhenCoverageIsNotProvided(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "work.go"), []byte("package work\nfunc Work() {}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	report := analyzeTestProject(t, root, Options{Root: root, Paths: []string{"work.go"}, CRAPThreshold: 30})
+	if len(report.Diagnostics) != 1 || report.Diagnostics[0].Code != "coverage-not-provided" || report.Diagnostics[0].Severity != "warning" {
+		t.Fatalf("diagnostics = %#v", report.Diagnostics)
+	}
+	if report.Diagnostics[0].Path != "" {
+		t.Fatalf("missing-coverage diagnostic path = %q, want empty", report.Diagnostics[0].Path)
+	}
+}
+
+func TestAnalyzerWarnsForCallablesWithUnknownCoverage(t *testing.T) {
+	root := t.TempDir()
+	source := "package work\n\nfunc Covered() int { return 1 }\n\nfunc Unknown() int { return 2 }\n"
+	if err := os.WriteFile(filepath.Join(root, "work.go"), []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	coverage := `<coverage><packages><package><classes><class filename="work.go"><lines><line number="3" hits="1"/></lines></class></classes></package></packages></coverage>`
+	if err := os.WriteFile(filepath.Join(root, "coverage.xml"), []byte(coverage), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	report := analyzeTestProject(t, root, Options{Root: root, Paths: []string{"work.go"}, CoveragePath: "coverage.xml", CRAPThreshold: 30})
+	unknown := 0
+	for _, diagnostic := range report.Diagnostics {
+		if diagnostic.Code == "coverage-callable-unknown" {
+			unknown++
+			if diagnostic.Path != "work.go" || diagnostic.Severity != "warning" {
+				t.Fatalf("unknown-coverage diagnostic = %#v", diagnostic)
+			}
+		}
+	}
+	if unknown != 1 {
+		t.Fatalf("diagnostics = %#v, unknown-coverage count = %d", report.Diagnostics, unknown)
+	}
+}
+
+func TestAnalyzerDoesNotWarnForCompleteCoverage(t *testing.T) {
+	root := t.TempDir()
+	source := "package work\n\nfunc Covered() int { return 1 }\n\nfunc AlsoCovered() int { return 2 }\n"
+	if err := os.WriteFile(filepath.Join(root, "work.go"), []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	coverage := `<coverage><packages><package><classes><class filename="work.go"><lines><line number="3" hits="1"/><line number="5" hits="1"/></lines></class></classes></package></packages></coverage>`
+	if err := os.WriteFile(filepath.Join(root, "coverage.xml"), []byte(coverage), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	report := analyzeTestProject(t, root, Options{Root: root, Paths: []string{"work.go"}, CoveragePath: "coverage.xml", CRAPThreshold: 30})
+	for _, diagnostic := range report.Diagnostics {
+		if diagnostic.Code == "coverage-not-provided" || diagnostic.Code == "coverage-callable-unknown" {
+			t.Fatalf("unexpected coverage diagnostic: %#v", diagnostic)
+		}
+	}
+}
+
+func TestAnalyzerDoesNotDuplicateUnknownCoverageForUnmatchedFiles(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "work.go"), []byte("package work\nfunc Work() {}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	coverage := `<coverage><packages><package><classes><class filename="other.go"><lines><line number="2" hits="1"/></lines></class></classes></package></packages></coverage>`
+	if err := os.WriteFile(filepath.Join(root, "coverage.xml"), []byte(coverage), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	report := analyzeTestProject(t, root, Options{Root: root, Paths: []string{"work.go"}, CoveragePath: "coverage.xml", CRAPThreshold: 30})
+	for _, diagnostic := range report.Diagnostics {
+		if diagnostic.Code == "coverage-callable-unknown" {
+			t.Fatalf("unmatched path received duplicate unknown-coverage diagnostic: %#v", report.Diagnostics)
+		}
+	}
+	if len(report.Diagnostics) != 1 || report.Diagnostics[0].Code != "coverage-path-unmatched" {
+		t.Fatalf("diagnostics = %#v", report.Diagnostics)
+	}
+}
+
 func TestTypeScriptCoverageUsesASTCallableOwnership(t *testing.T) {
 	root := t.TempDir()
 	source := `export function outer(flag: boolean): number {

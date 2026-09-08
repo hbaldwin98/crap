@@ -221,6 +221,17 @@ func writeGraphText(writer io.Writer, report analysis.CodeGraphReport) error {
 			return err
 		}
 	}
+	for _, diagnostic := range report.Diagnostics {
+		if diagnostic.Path == "" {
+			if _, err := fmt.Fprintf(writer, "%s: %s\n", diagnostic.Severity, diagnostic.Message); err != nil {
+				return err
+			}
+			continue
+		}
+		if _, err := fmt.Fprintf(writer, "%s: %s: %s\n", diagnostic.Severity, diagnostic.Path, diagnostic.Message); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -495,6 +506,17 @@ func writeReviewText(writer io.Writer, report analysis.ReviewReport) error {
 	}
 	for _, limitation := range report.Limitations {
 		if _, err := fmt.Fprintf(writer, "limitation: %s\n", limitation); err != nil {
+			return err
+		}
+	}
+	for _, diagnostic := range report.Diagnostics {
+		if diagnostic.Diagnostic.Path == "" {
+			if _, err := fmt.Fprintf(writer, "%s: %s\n", diagnostic.Diagnostic.Severity, diagnostic.Diagnostic.Message); err != nil {
+				return err
+			}
+			continue
+		}
+		if _, err := fmt.Fprintf(writer, "%s: %s: %s\n", diagnostic.Diagnostic.Severity, diagnostic.Diagnostic.Path, diagnostic.Diagnostic.Message); err != nil {
 			return err
 		}
 	}

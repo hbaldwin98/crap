@@ -204,13 +204,14 @@ func TestWriteReviewTextShowsRankedFindingsAndLimitations(t *testing.T) {
 			{Kind: "architecture", Title: "architecture rule violation in selected source"},
 		},
 		Limitations: []string{"structural evidence only"},
+		Diagnostics: []analysis.ReviewDiagnostic{{Source: "graph", Diagnostic: analysis.Diagnostic{Severity: "warning", Code: "coverage-not-provided", Message: "coverage is unknown"}}},
 	}
 	var output bytes.Buffer
 	if err := writeReviewText(&output, report); err != nil {
 		t.Fatal(err)
 	}
 	text := output.String()
-	for _, expected := range []string{"2 changed callables in 1 changed files; 1 new regressions", "[REGRESSION] new quality regression (src/work.go:4)", "[ARCHITECTURE] architecture rule violation", "limitation: structural evidence only"} {
+	for _, expected := range []string{"2 changed callables in 1 changed files; 1 new regressions", "[REGRESSION] new quality regression (src/work.go:4)", "[ARCHITECTURE] architecture rule violation", "limitation: structural evidence only", "warning: coverage is unknown"} {
 		if !strings.Contains(text, expected) {
 			t.Fatalf("output %q does not contain %q", text, expected)
 		}

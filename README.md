@@ -177,7 +177,7 @@ Upload `crap.sarif` with GitHub's `github/codeql-action/upload-sarif` action. SA
 
 ## Coverage
 
-Coverage is optional. Without a coverage report, each callable has `coveragePercent: null` and is conservatively scored as if it had 0% coverage.
+Coverage is optional. Without a coverage report, each callable has `coveragePercent: null` and is conservatively scored as if it had 0% coverage. Reports emit a `coverage-not-provided` warning so this assumption is visible in JSON, MCP, and text output. When a supplied report leaves one or more callables without attributable coverage, reports emit one `coverage-callable-unknown` warning per affected source file.
 
 For a Go project, generate a coverprofile and analyze it from that project's root:
 
@@ -226,7 +226,7 @@ Accepted formats:
 
 Cobertura coverage uses line-hit records. Go coverprofiles use their native statement counts. Callable names and ranges always come from the C#, Go, Rust, or TypeScript AST; Cobertura method names are ignored because instrumentation and source-map processing can rewrite them. A nested callable owns its own lines, so its coverage is excluded from its parent.
 
-Coverage paths are matched by exact normalized path, then by a unique component suffix, then by a unique case-insensitive match. Cobertura `<sources>` entries and both slash styles are supported. Non-exact matches produce deterministic diagnostics. Unmatched or ambiguous files retain `coveragePercent: null` and are conservatively scored as 0% coverage; use `--strict-coverage` in CI to reject those reports instead.
+Coverage paths are matched by exact normalized path, then by a unique component suffix, then by a unique case-insensitive match. Cobertura `<sources>` entries and both slash styles are supported. Non-exact matches produce deterministic diagnostics. Unmatched or ambiguous files retain `coveragePercent: null` and are conservatively scored as 0% coverage; use `--strict-coverage` in CI to reject those reports instead. A matched file with uninstrumented callables produces `coverage-callable-unknown`; this warning is suppressed when the file already has an unmatched or ambiguous path diagnostic.
 
 ## Changed Code
 
