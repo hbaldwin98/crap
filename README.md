@@ -65,6 +65,20 @@ go build -o crap ./cmd/crap
 go build -o crap-mutate ./cmd/crap-mutate
 ```
 
+For a shorter local build and install, use the included Makefile. The default
+install location is `~/.local/bin`:
+
+```sh
+make build                 # writes bin/crap and bin/crap-mutate
+make install               # installs both commands into ~/.local/bin
+make gh-install            # installs them and registers gh crap aliases
+```
+
+Override the destination with `BINDIR=/path/to/bin make install`. After
+`make gh-install`, `gh crap ...` invokes `crap` and `gh crap-mutate ...`
+invokes `crap-mutate`. The target requires GitHub CLI (`gh`) on `PATH` and
+updates those two project-specific aliases.
+
 On Windows, an explicit `.exe` name is convenient:
 
 ```powershell
