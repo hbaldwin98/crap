@@ -6,6 +6,8 @@ BINDIR ?= $(PREFIX)/bin
 CRAP := $(BUILD_DIR)/crap
 CRAP_MUTATE := $(BUILD_DIR)/crap-mutate
 
+GO_SOURCES := $(shell find . -name '*.go' -not -path './$(BUILD_DIR)/*') go.mod go.sum
+
 .PHONY: all build install gh-install test vet clean
 
 all: build
@@ -15,10 +17,10 @@ build: $(CRAP) $(CRAP_MUTATE)
 $(BUILD_DIR):
 	mkdir -p "$@"
 
-$(CRAP): $(BUILD_DIR)
+$(CRAP): $(GO_SOURCES) | $(BUILD_DIR)
 	$(GO) build -trimpath -o "$@" ./cmd/crap
 
-$(CRAP_MUTATE): $(BUILD_DIR)
+$(CRAP_MUTATE): $(GO_SOURCES) | $(BUILD_DIR)
 	$(GO) build -trimpath -o "$@" ./cmd/crap-mutate
 
 install: build

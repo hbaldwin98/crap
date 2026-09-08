@@ -37,6 +37,17 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   capped call-site evidence, explicit unresolved calls, and reverse traversal
   from changed callables to affected tests via `--diff-base`, with a published
   v1 JSON schema.
+- Unified change review through `crap review` and the `review_change` /
+  `get_review_change` MCP tools: one report joining changed-callable, baseline
+  regression, coverage, and architecture evidence, with optional Go
+  compiler-backed affected-test evidence via `--call-graph`, ranked findings,
+  explicit limitations, and a published v1 JSON schema.
+- `coverage-not-provided` and `coverage-callable-unknown` diagnostics that make
+  the zero-coverage CRAP scoring assumption visible in JSON, MCP, and text
+  output when coverage is absent or a matched file has uninstrumented
+  callables.
+- A `Makefile` with `build`, `install`, and `gh-install` targets for local
+  builds and registering `crap`/`crap-mutate` as GitHub CLI aliases.
 
 ### Changed
 

@@ -25,7 +25,11 @@ func TestMCPStdioRunsBuiltExecutable(t *testing.T) {
 		t.Fatal("locate repository root")
 	}
 	repository := filepath.Dir(filepath.Dir(filepath.Dir(sourceFile)))
-	binary := filepath.Join(t.TempDir(), "crap")
+	binaryName := "crap"
+	if runtime.GOOS == "windows" {
+		binaryName = "crap.exe"
+	}
+	binary := filepath.Join(t.TempDir(), binaryName)
 	build := exec.Command("go", "build", "-o", binary, "./cmd/crap")
 	build.Dir = repository
 	if output, err := build.CombinedOutput(); err != nil {

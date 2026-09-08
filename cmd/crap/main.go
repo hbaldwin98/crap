@@ -387,32 +387,37 @@ func runReview(args []string, stdout, stderr io.Writer) int {
 	if options.showHelp {
 		return 0
 	}
+	report, ok := prepareReviewReport(options, stderr)
+	if !ok {
+		return 1
+	}
+	return emitReviewReport(report, options, stdout, stderr)
+}
+
+func prepareReviewReport(options reviewCLIOptions, stderr io.Writer) (analysis.ReviewReport, bool) {
 	if options.base == "" {
 		fmt.Fprintln(stderr, "crap: review requires --base")
-		return 1
+		return analysis.ReviewReport{}, false
 	}
 	if options.output != "" {
 		if err := clioutput.Validate(options.output); err != nil {
 			fmt.Fprintf(stderr, "crap: invalid output path: %v\n", err)
-			return 1
+			return analysis.ReviewReport{}, false
 		}
 	}
 	root, err := os.Getwd()
 	if err != nil {
 		fmt.Fprintf(stderr, "crap: determine working directory: %v\n", err)
-		return 1
+		return analysis.ReviewReport{}, false
 	}
-	rules := analysis.ArchitectureRules{}
-	if options.rulesFile != "" {
-		rules, ok = parseArchitectureRules(options.rulesFile, stderr)
-		if !ok {
-			return 1
-		}
+	rules, ok := reviewArchitectureRules(options, stderr)
+	if !ok {
+		return analysis.ReviewReport{}, false
 	}
 	analyzer, err := analysis.NewAnalyzer()
 	if err != nil {
 		fmt.Fprintf(stderr, "crap: %v\n", err)
-		return 1
+		return analysis.ReviewReport{}, false
 	}
 	defer analyzer.Close()
 	report, err := analyzer.AnalyzeReview(analysis.ReviewOptions{
@@ -426,8 +431,19 @@ func runReview(args []string, stdout, stderr io.Writer) int {
 	})
 	if err != nil {
 		fmt.Fprintf(stderr, "crap: %v\n", err)
-		return 1
+		return analysis.ReviewReport{}, false
 	}
+	return report, true
+}
+
+func reviewArchitectureRules(options reviewCLIOptions, stderr io.Writer) (analysis.ArchitectureRules, bool) {
+	if options.rulesFile == "" {
+		return analysis.ArchitectureRules{}, true
+	}
+	return parseArchitectureRules(options.rulesFile, stderr)
+}
+
+func emitReviewReport(report analysis.ReviewReport, options reviewCLIOptions, stdout, stderr io.Writer) int {
 	if err := clioutput.Write(stdout, options.output, func(writer io.Writer) error {
 		if options.format == "json" {
 			encoder := json.NewEncoder(writer)
